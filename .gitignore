@@ -1,0 +1,7 @@
+__pycache__/
+*.egg-info
+solutions/
+tests/solutions/
+.pytest_cache
+# assignments/
+TODO.md

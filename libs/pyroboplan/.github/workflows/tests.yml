@@ -1,0 +1,79 @@
+name: tests
+
+on:
+  # Run action on certain pull request events
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+  # Nightly job on default (main) branch
+  schedule:
+    - cron: '0 0 * * *'
+
+  # Allow tests to be run manually
+  workflow_dispatch:
+
+# Ensures that only one workflow runs at a time for this branch
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        env:
+          - ubuntu_version: '22.04'
+            python_version: '3.10'
+          - ubuntu_version: '24.04'
+            python_version: '3.12'
+
+    runs-on: ubuntu-${{ matrix.env.ubuntu_version }}
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.env.python_version }}
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install -e .
+          pip3 install -r test/test_requirements.txt
+      - name: Run unit tests
+        run: test/run_tests.bash
+      - name: Pytest coverage comment
+        id: coverageComment
+        uses: MishaKav/pytest-coverage-comment@main
+        with:
+          pytest-coverage-path: ./test/results/pytest-coverage.txt
+          junitxml-path: ./test/results/test_results.xml
+          pytest-xml-coverage-path: ./test/results/test_results_coverage.xml
+          coverage-path-prefix: src/
+        # This will break on PRs from forks
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+      - name: Create coverage badge
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.COVERAGE_GIST_SECRET }}
+          # This comes from https://gist.github.com/sea-bass/e5e091166a18c68b26338793917d3bab#file-pyroboplan-test-coverage-json
+          gistID: e5e091166a18c68b26338793917d3bab
+          filename: pyroboplan-test-coverage.json
+          label: coverage
+          message: ${{ steps.coverageComment.outputs.coverage }}
+          color: ${{ steps.coverageComment.outputs.color }}
+          namedLogo: python
+        # Only update this badge on main
+        if: github.ref == 'refs/heads/main'
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-ubuntu${{ matrix.env.ubuntu_version }}-py${{ matrix.env.python_version }}
+          path: test/results/
+        # Always publish test results even when there are failures.
+        if: ${{ always() }}

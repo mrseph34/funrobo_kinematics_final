@@ -1,0 +1,3 @@
+[submodule "libs/pyroboplan"]
+	path = libs/pyroboplan
+	url = https://github.com/OlinCollege-FunRobo/pyroboplan.git

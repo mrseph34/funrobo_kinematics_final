@@ -1,0 +1,7 @@
+.coverage
+.pytest_cache/
+.virtualenvs/
+
+dist/
+**__pycache__/
+**.egg-info/

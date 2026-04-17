@@ -194,6 +194,8 @@ class MultiSegmentTrajectoryGenerator():
         # Concatenate all segments
         self.X = np.concatenate(segments_X, axis=2)
 
+        return self.X
+
     
     def plot(self):
         """

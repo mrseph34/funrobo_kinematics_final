@@ -1,3 +1,17 @@
+Install it:
+cd ~/funrobo_kinematics_final
+pip install -e .
+
+Add to path:
+export PYTHONPATH=$PYTHONPATH:/home/pi
+
+Make it Permanent:
+echo 'export PYTHONPATH=$PYTHONPATH:/home/pi' >> ~/.bashrc
+source ~/.bashrc
+
+Run it: 
+python /home/pi/funrobo_kinematics_final/project/path_planner_server.py
+
 # funrobo_kinematics
 
 **funrobo_kinematics** is a Python-based teaching library for explring robot kinematics, visualization, path and trajectory planning, etc. It serves as a **visualization tool (viz tool)** for working on kinematics modeling and analysis. It accompanies the class activities in modules 2-4 focusing on the following:

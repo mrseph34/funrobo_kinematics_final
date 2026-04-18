@@ -140,7 +140,7 @@ class ArmControlGUI:
         gripper_row.pack(fill="x", pady=4)
         self.close_width = tk.Entry(gripper_row, width=3, bg="#2a2d3d", fg=TXT,
                                     insertbackground=ACC, font=("Courier", 10), bd=0, justify="center")
-        self.close_width.insert(0, "0")
+        self.close_width.insert(0, "10")
         ttk.Button(gripper_row, text="CLOSE E.E.", style="Dim.TButton",
                    command=self._close_gripper).pack(side="left", padx=(0, 2))
         self.close_width.pack(side="left", padx=(0, 8))

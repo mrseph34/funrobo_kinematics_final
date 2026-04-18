@@ -175,6 +175,8 @@ def handle(conn):
                         time.sleep(DT)
                     time.sleep(0.3)
                     curr_joints = [np.deg2rad(j) for j in robot.get_joint_values()[:5]]
+                    final_ee, _ = model.calc_forward_kinematics(curr_joints)
+                    print(f"[SERVER] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
                     conn.sendall(b'{"status":"done"}\n')
 
                 elif msg["cmd"] == "move_xyz":
@@ -184,6 +186,7 @@ def handle(conn):
                     speed = msg["speed_mms"] / 1000.0
                     print(f"[SERVER] move_xyz -> x={x_m:.4f}  y={y_m:.4f}  z={z_m:.4f}  traj={msg['traj_method']}")
                     move_to(x_m, y_m, z_m, speed, msg["use_aik"], msg["traj_method"])
+                    print(f"[SERVER] joints -> {[round(np.rad2deg(j), 2) for j in curr_joints]}")
                     conn.sendall(b'{"status":"done"}\n')
 
     except Exception as e:

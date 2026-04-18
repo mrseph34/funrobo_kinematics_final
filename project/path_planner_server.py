@@ -14,6 +14,7 @@ PORT = 9999
 CONTROL_HZ = 20
 DT = 1.0 / CONTROL_HZ
 JOINT_DELTA_CLAMP_DEG = 15.0
+CART_STEP_M = 0.002
 
 robot = None
 model = None
@@ -26,7 +27,7 @@ def solve_ik(ee, use_aik):
         result = model.calc_inverse_kinematics(ee, curr_joints)
     else:
         result = model._newton_raphson_step(
-            curr_joints, np.array([ee.x, ee.y, ee.z]), tol=0.001, max_iter=30
+            curr_joints, np.array([ee.x, ee.y, ee.z]), tol=0.001, ilimit=30
         )
     return None if (result is None or len(result) == 0) else result
 
@@ -43,32 +44,30 @@ def make_traj(method_name, ndof):
 def move_to(x_m, y_m, z_m, speed, use_aik, traj_method):
     global curr_joints
 
-    target_ee = ut.EndEffector()
-    target_ee.x, target_ee.y, target_ee.z = x_m, y_m, z_m
-    target_joints = solve_ik(target_ee, use_aik)
-    if target_joints is None:
-        print("[SERVER] IK failed, cannot move")
-        return
-
     curr_ee, _ = model.calc_forward_kinematics(curr_joints)
     dist = math.sqrt((x_m - curr_ee.x)**2 + (y_m - curr_ee.y)**2 + (z_m - curr_ee.z)**2)
     if dist < 0.002:
         return
 
     T = dist / speed
-    ndof = len(curr_joints)
-    traj = make_traj(traj_method, ndof)
-    traj.solve(q0=curr_joints, qf=target_joints, qd0=None, qdf=None, T=T)
-    n_steps = max(1, int(T / DT))
-    t_arr, X = traj.generate(t0=0, tf=T, nsteps=n_steps)
+    n_steps = max(2, int(dist / CART_STEP_M))
+    step_dt = T / n_steps
 
-    for i in range(n_steps):
-        q = X[:, 0, i].tolist()
-        if max(abs(np.rad2deg(q[j] - curr_joints[j])) for j in range(ndof)) > JOINT_DELTA_CLAMP_DEG:
+    for i in range(1, n_steps + 1):
+        t = i / n_steps
+        step_ee = ut.EndEffector()
+        step_ee.x = curr_ee.x + t * (x_m - curr_ee.x)
+        step_ee.y = curr_ee.y + t * (y_m - curr_ee.y)
+        step_ee.z = curr_ee.z + t * (z_m - curr_ee.z)
+        q = solve_ik(step_ee, use_aik)
+        if q is None:
+            continue
+        delta = max(abs(np.rad2deg(q[j] - curr_joints[j])) for j in range(len(curr_joints)))
+        if delta > JOINT_DELTA_CLAMP_DEG:
             continue
         curr_joints = q
-        robot.set_joint_values([np.rad2deg(j) for j in curr_joints] + [gripper_angle], duration=DT, radians=False)
-        time.sleep(DT)
+        robot.set_joint_values([np.rad2deg(j) for j in curr_joints] + [gripper_angle], duration=step_dt, radians=False)
+        time.sleep(step_dt)
 
     time.sleep(0.3)
     curr_joints = [np.deg2rad(j) for j in robot.get_joint_values()[:5]]

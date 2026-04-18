@@ -138,10 +138,19 @@ class ArmControlGUI:
 
         gripper_row = ttk.Frame(panel, style="Dark.TFrame")
         gripper_row.pack(fill="x", pady=4)
+        self.close_width = tk.Entry(gripper_row, width=3, bg="#2a2d3d", fg=TXT,
+                                    insertbackground=ACC, font=("Courier", 10), bd=0, justify="center")
+        self.close_width.insert(0, "0")
         ttk.Button(gripper_row, text="CLOSE E.E.", style="Dim.TButton",
-                   command=self._close_gripper).pack(side="left", padx=(0, 4), expand=True, fill="x")
+                   command=self._close_gripper).pack(side="left", padx=(0, 2))
+        self.close_width.pack(side="left", padx=(0, 8))
+
+        self.open_width = tk.Entry(gripper_row, width=3, bg="#2a2d3d", fg=TXT,
+                                   insertbackground=ACC, font=("Courier", 10), bd=0, justify="center")
+        self.open_width.insert(0, "100")
         ttk.Button(gripper_row, text="OPEN E.E.", style="Dim.TButton",
-                   command=self._open_gripper).pack(side="left", expand=True, fill="x")
+                   command=self._open_gripper).pack(side="left", padx=(0, 2))
+        self.open_width.pack(side="left")
 
         ttk.Button(panel, text="⊕  SIMULATE", style="Dim.TButton",
                    command=self._simulate).pack(fill="x", pady=4)
@@ -268,11 +277,19 @@ class ArmControlGUI:
                 self.status.set(f"Moving to joints {joints}...")
 
     def _open_gripper(self):
-        if self._send({"cmd": "gripper", "action": "open"}):
+        try:
+            w = -abs(int(self.open_width.get()))
+        except ValueError:
+            w = -100
+        if self._send({"cmd": "gripper", "action": "open", "width": w}):
             self.status.set("Opening gripper...")
 
     def _close_gripper(self):
-        if self._send({"cmd": "gripper", "action": "close"}):
+        try:
+            w = -abs(int(self.close_width.get()))
+        except ValueError:
+            w = 0
+        if self._send({"cmd": "gripper", "action": "close", "width": w}):
             self.status.set("Closing gripper...")
 
     def _home(self):

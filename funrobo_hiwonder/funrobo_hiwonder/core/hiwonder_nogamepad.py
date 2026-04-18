@@ -443,6 +443,23 @@ class RobotV5(BaseRobot):
             self.board.bus_servo_set_position(self.gripper_duration, positions)
 
 
+    def set_gripper(self, angle: float) -> None:
+        joint_values = self.get_joint_values()
+        joint_values_hw = self.remap_joints(joint_values)
+        angle = np.clip(angle, self.joint_limits[5][0], self.joint_limits[5][1])
+
+        positions = []
+        for joint_id, theta in enumerate(joint_values_hw, start=1):
+            if joint_id == 1:
+                pulse = self.angle_to_pulse(angle)
+            else:
+                pulse = self.angle_to_pulse(theta)
+            positions.append([joint_id, pulse])
+
+        with self.board_lock:
+            self.board.bus_servo_set_position(self.gripper_duration, positions)
+
+
     def disable_servos(self) -> None:
         """
         Disable torque on all servos (v5).
@@ -609,6 +626,12 @@ class RobotV36(BaseRobot):
         """
         close_pulse = self.angle_to_pulse(self.close_gripper_angle)
         setServoPulse(1, close_pulse, int(self.gripper_duration))
+
+
+    def set_gripper(self, angle: float) -> None:
+        angle = np.clip(angle, self.joint_limits[5][0], self.joint_limits[5][1])
+        pulse = self.angle_to_pulse(angle)
+        setServoPulse(1, pulse, int(self.gripper_duration))
 
     
     def shutdown_robot(self) -> None:

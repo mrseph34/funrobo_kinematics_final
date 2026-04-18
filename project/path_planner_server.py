@@ -133,7 +133,10 @@ def handle(conn):
                     conn.sendall(b'{"status":"homed"}\n')
 
                 elif msg["cmd"] == "gripper":
-                    if msg["action"] == "open":
+                    width = msg.get("width", None)
+                    if width is not None:
+                        robot.set_gripper(float(width))
+                    elif msg["action"] == "open":
                         robot.open_gripper()
                     else:
                         robot.close_gripper()

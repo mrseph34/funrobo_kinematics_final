@@ -88,24 +88,26 @@ class ArmControlGUI:
         xyz_row = ttk.Frame(panel, style="Dark.TFrame")
         xyz_row.pack(fill="x", pady=4)
         self.xyz_entries = {}
-        for label in ["X (mm)", "Y (mm)", "Z (mm)"]:
+        for label, default in [("X (mm)", "-233.6"), ("Y (mm)", "0.0"), ("Z (mm)", "174.0")]:
             col = ttk.Frame(xyz_row, style="Dark.TFrame")
             col.pack(side="left", padx=8)
             ttk.Label(col, text=label, style="Dark.TLabel").pack()
             entry = tk.Entry(col, width=8, bg="#2a2d3d", fg=TXT,
                              insertbackground=ACC, font=("Courier", 12), bd=0, justify="center")
+            entry.insert(0, default)
             entry.pack()
             self.xyz_entries[label[0]] = entry
 
         joint_row = ttk.Frame(panel, style="Dark.TFrame")
         joint_row.pack(fill="x", pady=4)
         self.joint_entries = {}
-        for i in range(1, 6):
+        for i, default in enumerate([0, 0, 90, -30, 0], start=1):
             col = ttk.Frame(joint_row, style="Dark.TFrame")
             col.pack(side="left", padx=4)
             ttk.Label(col, text=f"J{i}°", style="Dark.TLabel").pack()
             entry = tk.Entry(col, width=6, bg="#2a2d3d", fg=TXT,
                              insertbackground=ACC, font=("Courier", 11), bd=0, justify="center")
+            entry.insert(0, str(default))
             entry.pack()
             self.joint_entries[i] = entry
 
@@ -133,6 +135,13 @@ class ArmControlGUI:
             tk.Radiobutton(traj_row, text=txt, variable=self.traj_method, value=txt,
                            bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
                            activebackground=PANEL, font=("Courier", 9)).pack(side="left", padx=4)
+
+        gripper_row = ttk.Frame(panel, style="Dark.TFrame")
+        gripper_row.pack(fill="x", pady=4)
+        ttk.Button(gripper_row, text="CLOSE E.E.", style="Dim.TButton",
+                   command=self._close_gripper).pack(side="left", padx=(0, 4), expand=True, fill="x")
+        ttk.Button(gripper_row, text="OPEN E.E.", style="Dim.TButton",
+                   command=self._open_gripper).pack(side="left", expand=True, fill="x")
 
         ttk.Button(panel, text="⊕  SIMULATE", style="Dim.TButton",
                    command=self._simulate).pack(fill="x", pady=4)
@@ -257,6 +266,14 @@ class ArmControlGUI:
                 "traj_method": self.traj_method.get(),
             }):
                 self.status.set(f"Moving to joints {joints}...")
+
+    def _open_gripper(self):
+        if self._send({"cmd": "gripper", "action": "open"}):
+            self.status.set("Opening gripper...")
+
+    def _close_gripper(self):
+        if self._send({"cmd": "gripper", "action": "close"}):
+            self.status.set("Closing gripper...")
 
     def _home(self):
         if self._send({"cmd": "home"}):

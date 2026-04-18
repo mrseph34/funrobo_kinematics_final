@@ -132,6 +132,13 @@ def handle(conn):
                     curr_joints = [np.deg2rad(j) for j in robot.get_joint_values()[:5]]
                     conn.sendall(b'{"status":"homed"}\n')
 
+                elif msg["cmd"] == "gripper":
+                    if msg["action"] == "open":
+                        robot.open_gripper()
+                    else:
+                        robot.close_gripper()
+                    conn.sendall(b'{"status":"done"}\n')
+
                 elif msg["cmd"] == "simulate":
                     x_m = msg["x_mm"] / 1000.0
                     y_m = msg["y_mm"] / 1000.0

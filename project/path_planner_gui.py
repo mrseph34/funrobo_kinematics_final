@@ -88,7 +88,7 @@ class ArmControlGUI:
         xyz_row = ttk.Frame(panel, style="Dark.TFrame")
         xyz_row.pack(fill="x", pady=4)
         self.xyz_entries = {}
-        for label, default in [("X (mm)", "0.0"), ("Y (mm)", "-233.6"), ("Z (mm)", "174.0")]:
+        for label, default in [("X (mm)", "0.0"), ("Y (mm)", "233.6"), ("Z (mm)", "174.0")]:
             col = ttk.Frame(xyz_row, style="Dark.TFrame")
             col.pack(side="left", padx=8)
             ttk.Label(col, text=label, style="Dark.TLabel").pack()
@@ -224,7 +224,7 @@ class ArmControlGUI:
 
     def _get_xyz(self):
         try:
-            return (float(self.xyz_entries["Y"].get()),
+            return (-float(self.xyz_entries["Y"].get()),
                     float(self.xyz_entries["X"].get()),
                     float(self.xyz_entries["Z"].get()))
         except ValueError:

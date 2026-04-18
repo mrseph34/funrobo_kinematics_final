@@ -108,8 +108,6 @@ def handle(conn):
 
     robot = HiwonderRobot()
     model = FiveDOFRobot()
-    robot.move_to_home_position()
-    time.sleep(1.0)
     curr_joints = [np.deg2rad(j) for j in robot.get_joint_values()[:5]]
 
     home_ee, _ = model.calc_forward_kinematics(curr_joints)

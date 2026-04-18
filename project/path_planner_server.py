@@ -18,6 +18,7 @@ JOINT_DELTA_CLAMP_DEG = 15.0
 robot = None
 model = None
 curr_joints = None
+gripper_angle = 0.0
 
 
 def solve_ik(ee, use_aik):
@@ -66,7 +67,7 @@ def move_to(x_m, y_m, z_m, speed, use_aik, traj_method):
         if max(abs(np.rad2deg(q[j] - curr_joints[j])) for j in range(ndof)) > JOINT_DELTA_CLAMP_DEG:
             continue
         curr_joints = q
-        robot.set_joint_values([np.rad2deg(j) for j in curr_joints] + [0], duration=DT, radians=False)
+        robot.set_joint_values([np.rad2deg(j) for j in curr_joints] + [gripper_angle], duration=DT, radians=False)
         time.sleep(DT)
 
     time.sleep(0.3)
@@ -133,12 +134,16 @@ def handle(conn):
                     conn.sendall(b'{"status":"homed"}\n')
 
                 elif msg["cmd"] == "gripper":
+                    global gripper_angle
                     width = msg.get("width", None)
                     if width is not None:
-                        robot.set_gripper(float(width))
+                        gripper_angle = float(width)
+                        robot.set_gripper(gripper_angle)
                     elif msg["action"] == "open":
+                        gripper_angle = robot.open_gripper_angle
                         robot.open_gripper()
                     else:
+                        gripper_angle = robot.close_gripper_angle
                         robot.close_gripper()
                     conn.sendall(b'{"status":"done"}\n')
 
@@ -169,7 +174,7 @@ def handle(conn):
                         if max(abs(np.rad2deg(q[j] - curr_joints[j])) for j in range(ndof)) > JOINT_DELTA_CLAMP_DEG:
                             continue
                         curr_joints = q
-                        robot.set_joint_values([np.rad2deg(j) for j in curr_joints] + [0], duration=DT, radians=False)
+                        robot.set_joint_values([np.rad2deg(j) for j in curr_joints] + [gripper_angle], duration=DT, radians=False)
                         time.sleep(DT)
                     time.sleep(0.3)
                     curr_joints = [np.deg2rad(j) for j in robot.get_joint_values()[:5]]

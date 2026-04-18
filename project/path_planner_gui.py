@@ -138,19 +138,16 @@ class ArmControlGUI:
 
         gripper_row = ttk.Frame(panel, style="Dark.TFrame")
         gripper_row.pack(fill="x", pady=4)
-        self.close_width = tk.Entry(gripper_row, width=3, bg="#2a2d3d", fg=TXT,
-                                    insertbackground=ACC, font=("Courier", 10), bd=0, justify="center")
-        self.close_width.insert(0, "10")
         ttk.Button(gripper_row, text="CLOSE E.E.", style="Dim.TButton",
-                   command=self._close_gripper).pack(side="left", padx=(0, 2))
-        self.close_width.pack(side="left", padx=(0, 8))
-
-        self.open_width = tk.Entry(gripper_row, width=3, bg="#2a2d3d", fg=TXT,
-                                   insertbackground=ACC, font=("Courier", 10), bd=0, justify="center")
-        self.open_width.insert(0, "100")
+                   command=self._close_gripper).pack(side="left", expand=True, fill="x", padx=(0, 2))
         ttk.Button(gripper_row, text="OPEN E.E.", style="Dim.TButton",
-                   command=self._open_gripper).pack(side="left", padx=(0, 2))
-        self.open_width.pack(side="left")
+                   command=self._open_gripper).pack(side="left", expand=True, fill="x", padx=(0, 2))
+        ttk.Button(gripper_row, text="SET E.E.", style="Dim.TButton",
+                   command=self._set_gripper).pack(side="left", padx=(0, 4))
+        self.gripper_val = tk.Entry(gripper_row, width=5, bg="#2a2d3d", fg=TXT,
+                                    insertbackground=ACC, font=("Courier", 10), bd=0, justify="center")
+        self.gripper_val.insert(0, "50")
+        self.gripper_val.pack(side="left")
 
         ttk.Button(panel, text="⊕  SIMULATE", style="Dim.TButton",
                    command=self._simulate).pack(fill="x", pady=4)
@@ -277,20 +274,21 @@ class ArmControlGUI:
                 self.status.set(f"Moving to joints {joints}...")
 
     def _open_gripper(self):
-        try:
-            w = -abs(int(self.open_width.get()))
-        except ValueError:
-            w = -100
-        if self._send({"cmd": "gripper", "action": "open", "width": w}):
+        if self._send({"cmd": "gripper", "action": "open", "width": -100}):
             self.status.set("Opening gripper...")
 
     def _close_gripper(self):
-        try:
-            w = -abs(int(self.close_width.get()))
-        except ValueError:
-            w = 0
-        if self._send({"cmd": "gripper", "action": "close", "width": w}):
+        if self._send({"cmd": "gripper", "action": "close", "width": -10}):
             self.status.set("Closing gripper...")
+
+    def _set_gripper(self):
+        try:
+            w = -abs(int(self.gripper_val.get()))
+        except ValueError:
+            messagebox.showerror("Invalid input", "Gripper value must be a number.")
+            return
+        if self._send({"cmd": "gripper", "action": "set", "width": w}):
+            self.status.set(f"Gripper set to {abs(w)}...")
 
     def _home(self):
         if self._send({"cmd": "home"}):

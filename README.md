@@ -10,6 +10,7 @@ echo 'export PYTHONPATH=$PYTHONPATH:/home/pi' >> ~/.bashrc
 source ~/.bashrc
 
 Run it: 
+conda activate funrobo_hw
 python /home/pi/funrobo_kinematics_final/project/path_planner_server.py
 
 # funrobo_kinematics

@@ -4,7 +4,7 @@ import socket
 import json
 import threading
 
-PI_HOST = "192.168.16.69"
+PI_HOST = "192.168.16.154"
 PI_PORT = 9999
 MOVE_SPEED_MMS = 30
 
@@ -23,6 +23,7 @@ class ArmControlGUI:
         self.speed_mms = tk.DoubleVar(value=MOVE_SPEED_MMS)
         self.traj_method = tk.StringVar(value="Trapezoidal")
         self.use_xyz = tk.BooleanVar(value=True)
+        self.inverted = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Not connected — click Connect")
 
         self._build_ui()
@@ -88,7 +89,7 @@ class ArmControlGUI:
         xyz_row = ttk.Frame(panel, style="Dark.TFrame")
         xyz_row.pack(fill="x", pady=4)
         self.xyz_entries = {}
-        for label, default in [("X (mm)", "0.0"), ("Y (mm)", "233.6"), ("Z (mm)", "174.0")]:
+        for label, default in [("X (mm)", "0"), ("Y (mm)", "233"), ("Z (mm)", "174")]:
             col = ttk.Frame(xyz_row, style="Dark.TFrame")
             col.pack(side="left", padx=8)
             ttk.Label(col, text=label, style="Dark.TLabel").pack()
@@ -114,7 +115,7 @@ class ArmControlGUI:
         speed_row = ttk.Frame(panel, style="Dark.TFrame")
         speed_row.pack(fill="x", pady=4)
         ttk.Label(speed_row, text="Speed (mm/s):", style="Dark.TLabel").pack(side="left")
-        tk.Scale(speed_row, variable=self.speed_mms, from_=5, to=100, resolution=5,
+        tk.Scale(speed_row, variable=self.speed_mms, from_=5, to=1000, resolution=5,
                  orient="horizontal", length=160, bg=PANEL, fg=TXT,
                  troughcolor="#2a2d3d", activebackground=ACC,
                  highlightthickness=0, bd=0, showvalue=True,
@@ -136,6 +137,15 @@ class ArmControlGUI:
                            bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
                            activebackground=PANEL, font=("Courier", 9)).pack(side="left", padx=4)
 
+        posture_row = ttk.Frame(panel, style="Dark.TFrame")
+        posture_row.pack(fill="x", pady=4)
+        ttk.Label(posture_row, text="Posture:", style="Dark.TLabel").pack(side="left")
+        for txt, val in [("Normal", False), ("Inverted", True)]:
+            tk.Radiobutton(posture_row, text=txt, variable=self.inverted, value=val,
+                           bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
+                           activebackground=PANEL, font=("Courier", 9),
+                           command=self._send_posture).pack(side="left", padx=4)
+
         gripper_row = ttk.Frame(panel, style="Dark.TFrame")
         gripper_row.pack(fill="x", pady=4)
         ttk.Button(gripper_row, text="CLOSE E.E.", style="Dim.TButton",
@@ -149,8 +159,8 @@ class ArmControlGUI:
         self.gripper_val.insert(0, "50")
         self.gripper_val.pack(side="left")
 
-        ttk.Button(panel, text="⊕  SIMULATE", style="Dim.TButton",
-                   command=self._simulate).pack(fill="x", pady=4)
+        ttk.Button(panel, text="⊕  MOVE TO DROPOFF", style="Dim.TButton",
+                   command=self._move_dropoff).pack(fill="x", pady=4)
         ttk.Button(panel, text="▶  MOVE TO POSITION", style="Accent.TButton",
                    command=self._move_xyz).pack(fill="x", pady=4)
         ttk.Button(panel, text="⌂  HOME", style="Dim.TButton",
@@ -224,26 +234,22 @@ class ArmControlGUI:
 
     def _get_xyz(self):
         try:
-            return (-float(self.xyz_entries["Y"].get()),
-                    float(self.xyz_entries["X"].get()),
+            return (float(self.xyz_entries["X"].get()),
+                    float(self.xyz_entries["Y"].get()),
                     float(self.xyz_entries["Z"].get()))
         except ValueError:
             messagebox.showerror("Invalid input", "X, Y, and Z must be numbers.")
             return None
 
-    def _simulate(self):
-        xyz = self._get_xyz()
-        if xyz is None:
-            return
-        x, y, z = xyz
-        self._send({
-            "cmd": "simulate",
-            "x_mm": x, "y_mm": y, "z_mm": z,
+    def _move_dropoff(self):
+        if self._send({
+            "cmd": "move_xyz",
+            "x_mm": 0, "y_mm": 200, "z_mm": -150,
             "speed_mms": self.speed_mms.get(),
             "use_aik": self.use_aik.get(),
             "traj_method": self.traj_method.get(),
-        })
-        self.status.set("Simulating...")
+        }):
+            self.status.set("Moving to dropoff...")
 
     def _move_xyz(self):
         if self.use_xyz.get():
@@ -272,6 +278,9 @@ class ArmControlGUI:
                 "traj_method": self.traj_method.get(),
             }):
                 self.status.set(f"Moving to joints {joints}...")
+
+    def _send_posture(self):
+        self._send({"cmd": "set_posture", "inverted": self.inverted.get()})
 
     def _open_gripper(self):
         if self._send({"cmd": "gripper", "action": "open", "width": -100}):

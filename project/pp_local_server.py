@@ -15,6 +15,7 @@ import json
 import time
 import threading
 import queue
+import select
 import numpy as np
 import math
 import matplotlib
@@ -39,6 +40,12 @@ model = None
 curr_joints = None
 running = False
 plot_queue = queue.Queue()
+_move_cancel = False
+_move_thread = None
+
+
+def remap(x_mm, y_mm, z_mm):
+    return -z_mm / 1000.0, x_mm / 1000.0, y_mm / 1000.0
 
 
 def make_ee(x, y, z):
@@ -48,7 +55,7 @@ def make_ee(x, y, z):
 
 
 def solve_ik(ee, use_aik):
-    seed = HOME_JOINTS_RAD[:]
+    seed = [0.0, 0.0, 0.0, 0.0, 0.0]
     if use_aik:
         result = model.calc_inverse_kinematics(ee, seed)
     else:
@@ -71,6 +78,13 @@ def get_joint_positions(joints_rad):
 
 def push_joints(joints_rad):
     plot_queue.put(list(joints_rad))
+
+
+def _cancel_move():
+    global _move_cancel
+    _move_cancel = True
+    if _move_thread and _move_thread.is_alive():
+        _move_thread.join(timeout=0.3)
 
 
 def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method):
@@ -105,7 +119,7 @@ def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method):
     t_arr, X = gen.generate(t0=0, tf=T, nsteps=nsteps)
 
     for k in range(nsteps):
-        if not running:
+        if not running or _move_cancel:
             break
         curr_joints = X[:, 0, k].tolist()
         push_joints(curr_joints)
@@ -131,7 +145,7 @@ def move_to_traj_joints(q_target, speed, traj_method):
     gen.solve(q0, qf, None, None, T)
     t_arr, X = gen.generate(t0=0, tf=T, nsteps=nsteps)
     for k in range(nsteps):
-        if not running:
+        if not running or _move_cancel:
             break
         curr_joints = X[:, 0, k].tolist()
         push_joints(curr_joints)
@@ -150,7 +164,13 @@ def handle(conn):
     buf = ""
     try:
         while True:
-            data = conn.recv(4096).decode()
+            ready, _, _ = select.select([conn], [], [], 0.02)
+            if not ready:
+                continue
+            try:
+                data = conn.recv(4096).decode()
+            except Exception:
+                break
             if not data:
                 break
             buf += data
@@ -159,46 +179,47 @@ def handle(conn):
                 msg = json.loads(line)
 
                 if msg["cmd"] == "stop":
-                    running = False
+                    _cancel_move()
                     conn.sendall(b'{"status":"stopped"}\n')
 
                 elif msg["cmd"] == "home":
+                    _cancel_move()
                     curr_joints = HOME_JOINTS_RAD[:]
                     push_joints(curr_joints)
                     conn.sendall(b'{"status":"homed"}\n')
 
                 elif msg["cmd"] == "move_xyz":
-                    running = False
-                    time.sleep(0.02)
-                    running = True
-                    x_m = msg["x_mm"] / 1000.0
-                    y_m = msg["y_mm"] / 1000.0
-                    z_m = msg["z_mm"] / 1000.0
+                    _cancel_move()
+                    x_m, y_m, z_m = remap(msg["x_mm"], msg["y_mm"], msg["z_mm"])
                     speed = msg["speed_mms"] / 1000.0
                     use_aik = msg["use_aik"]
-                    traj_method = msg.get("traj_method", "cubic")
+                    traj_method = msg.get("traj_method", "Trapezoidal")
                     print(f"[SIM] move_xyz -> x={x_m:.4f}  y={y_m:.4f}  z={z_m:.4f}  traj={traj_method}")
-                    move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method)
-                    running = False
-                    final_ee, _ = model.calc_forward_kinematics(curr_joints)
-                    print(f"[SIM] joints -> {[round(np.rad2deg(j), 2) for j in curr_joints]}")
-                    print(f"[SIM] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
-                    conn.sendall(b'{"status":"done"}\n')
+                    def _do_xyz(x_m=x_m, y_m=y_m, z_m=z_m, speed=speed, use_aik=use_aik, traj_method=traj_method):
+                        global _move_cancel
+                        _move_cancel = False
+                        move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method)
+                        final_ee, _ = model.calc_forward_kinematics(curr_joints)
+                        print(f"[SIM] joints -> {[round(np.rad2deg(j), 2) for j in curr_joints]}")
+                        print(f"[SIM] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
+                        conn.sendall(b'{"status":"done"}\n')
+                    threading.Thread(target=_do_xyz, daemon=True).start()
 
                 elif msg["cmd"] == "move_joints":
-                    running = False
-                    time.sleep(0.02)
-                    running = True
+                    _cancel_move()
                     joints_deg = msg["joints"]
                     speed = msg["speed_mms"] / 1000.0
-                    traj_method = msg.get("traj_method", "cubic")
+                    traj_method = msg.get("traj_method", "Trapezoidal")
                     q_target = [np.deg2rad(j) for j in joints_deg]
                     print(f"[SIM] move_joints -> {joints_deg}  traj={traj_method}")
-                    move_to_traj_joints(q_target, speed, traj_method)
-                    running = False
-                    final_ee, _ = model.calc_forward_kinematics(curr_joints)
-                    print(f"[SIM] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
-                    conn.sendall(b'{"status":"done"}\n')
+                    def _do_joints(q_target=q_target, speed=speed, traj_method=traj_method):
+                        global _move_cancel
+                        _move_cancel = False
+                        move_to_traj_joints(q_target, speed, traj_method)
+                        final_ee, _ = model.calc_forward_kinematics(curr_joints)
+                        print(f"[SIM] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
+                        conn.sendall(b'{"status":"done"}\n')
+                    threading.Thread(target=_do_joints, daemon=True).start()
 
                 elif msg["cmd"] in ("simulate", "set_posture", "gripper"):
                     conn.sendall(b'{"status":"done"}\n')

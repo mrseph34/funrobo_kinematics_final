@@ -1,122 +1,176 @@
+"""
+Path Planner Sim Server — runs locally on your laptop.
+Start this first, then connect the GUI with host = "localhost".
+
+Standalone matplotlib visualizer — no dependency on RobotSim/Visualizer.
+"""
+
+import sys
+import os
+sys.path.append(os.path.abspath("examples"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import socket
 import json
 import time
-import math
+import threading
+import queue
+import select
 import numpy as np
+import math
+import matplotlib
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
-from funrobo_kinematics_final.project.five_dof import FiveDOFRobot
-from funrobo_kinematics_final.funrobo_hiwonder.funrobo_hiwonder.core.hiwonder_nogamepad import HiwonderRobot
+from traj_gen import CubicPolynomial, QuinticPolynomial, TrapezoidalTrajectory
 import funrobo_kinematics.core.utils as ut
-from funrobo_kinematics_final.examples.traj_gen import CubicPolynomial, QuinticPolynomial, TrapezoidalTrajectory
+from five_dof import FiveDOFRobot
 
-HOST = "0.0.0.0"
+HOST = "localhost"
 PORT = 9999
 CONTROL_HZ = 20
 DT = 1.0 / CONTROL_HZ
 JOINT_DELTA_CLAMP_DEG = 15.0
-CART_STEP_M = 0.002
 
-robot = None
+HOME_JOINTS_DEG = [0, 0, 90, -30, 0]
+HOME_JOINTS_RAD = [np.deg2rad(j) for j in HOME_JOINTS_DEG]
+
 model = None
 curr_joints = None
-gripper_angle = 0.0
+running = False
+plot_queue = queue.Queue()
+_move_cancel = False
+_move_thread = None
+
+
+def remap(x_mm, y_mm, z_mm):
+    return -z_mm / 1000.0, x_mm / 1000.0, y_mm / 1000.0
+
+
+def make_ee(x, y, z):
+    ee = ut.EndEffector()
+    ee.x, ee.y, ee.z = x, y, z
+    return ee
 
 
 def solve_ik(ee, use_aik):
+    seed = [0.0, 0.0, 0.0, 0.0, 0.0]
     if use_aik:
-        result = model.calc_inverse_kinematics(ee, curr_joints)
+        result = model.calc_inverse_kinematics(ee, seed)
     else:
         result = model._newton_raphson_step(
-            curr_joints, np.array([ee.x, ee.y, ee.z]), tol=0.001, ilimit=30
+            seed, np.array([ee.x, ee.y, ee.z]), tol=0.001, max_iter=30
         )
     return None if (result is None or len(result) == 0) else result
 
 
-def make_traj(method_name, ndof):
-    if method_name == "Cubic":
-        return CubicPolynomial(ndof=ndof)
-    elif method_name == "Quintic":
-        return QuinticPolynomial(ndof=ndof)
-    else:
-        return TrapezoidalTrajectory(ndof=ndof)
+def get_joint_positions(joints_rad):
+    """Return list of [x,y,z] for base + each joint origin using cumulative FK transforms."""
+    _, Hlist = model.calc_forward_kinematics(joints_rad)
+    pts = [np.array([0.0, 0.0, 0.0])]
+    H = np.eye(4)
+    for Hi in Hlist:
+        H = H @ Hi
+        pts.append(H[:3, 3])
+    return pts
 
 
-def move_to(x_m, y_m, z_m, speed, use_aik, traj_method):
+def push_joints(joints_rad):
+    plot_queue.put(list(joints_rad))
+
+
+def _cancel_move():
+    global _move_cancel
+    _move_cancel = True
+    if _move_thread and _move_thread.is_alive():
+        _move_thread.join(timeout=0.3)
+
+
+def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method):
     global curr_joints
-
     curr_ee, _ = model.calc_forward_kinematics(curr_joints)
-    dist = math.sqrt((x_m - curr_ee.x)**2 + (y_m - curr_ee.y)**2 + (z_m - curr_ee.z)**2)
-    if dist < 0.002:
+    dx = x_m - curr_ee.x
+    dy = y_m - curr_ee.y
+    dz = z_m - curr_ee.z
+    dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+    if dist < 0.001:
         return
 
-    T = dist / speed
-    n_steps = max(2, int(dist / CART_STEP_M))
-    step_dt = T / n_steps
+    T = max(dist / speed, DT * 2)
+    nsteps = max(2, int(T / DT))
 
-    for i in range(1, n_steps + 1):
-        t = i / n_steps
-        step_ee = ut.EndEffector()
-        step_ee.x = curr_ee.x + t * (x_m - curr_ee.x)
-        step_ee.y = curr_ee.y + t * (y_m - curr_ee.y)
-        step_ee.z = curr_ee.z + t * (z_m - curr_ee.z)
-        q = solve_ik(step_ee, use_aik)
-        if q is None:
-            continue
-        delta = max(abs(np.rad2deg(q[j] - curr_joints[j])) for j in range(len(curr_joints)))
-        if delta > JOINT_DELTA_CLAMP_DEG:
-            continue
-        curr_joints = q
-        robot.set_joint_values([np.rad2deg(j) for j in curr_joints] + [gripper_angle], duration=step_dt, radians=False)
-        time.sleep(step_dt)
+    q0 = np.array(curr_joints)
+    qf_list = solve_ik(make_ee(x_m, y_m, z_m), use_aik)
+    if qf_list is None or len(qf_list) == 0:
+        print(f"[SIM] IK failed for ({x_m:.4f}, {y_m:.4f}, {z_m:.4f})")
+        return
+    qf = np.array(qf_list)
 
-    time.sleep(0.3)
-    curr_joints = [np.deg2rad(j) for j in robot.get_joint_values()[:5]]
+    ndof = len(q0)
+    if traj_method.lower() == "quintic":
+        gen = QuinticPolynomial(ndof=ndof)
+    elif traj_method.lower() == "trapezoidal":
+        gen = TrapezoidalTrajectory(ndof=ndof)
+    else:
+        gen = CubicPolynomial(ndof=ndof)
+
+    gen.solve(q0, qf, None, None, T)
+    t_arr, X = gen.generate(t0=0, tf=T, nsteps=nsteps)
+
+    for k in range(nsteps):
+        if not running or _move_cancel:
+            break
+        curr_joints = X[:, 0, k].tolist()
+        push_joints(curr_joints)
+        time.sleep(T / nsteps)
 
 
-def simulate(x_m, y_m, z_m, speed, use_aik, traj_method):
-    curr_ee, _ = model.calc_forward_kinematics(curr_joints)
-    dist = math.sqrt((x_m - curr_ee.x)**2 + (y_m - curr_ee.y)**2 + (z_m - curr_ee.z)**2)
-
-    target_ee = ut.EndEffector()
-    target_ee.x, target_ee.y, target_ee.z = x_m, y_m, z_m
-    target_joints = solve_ik(target_ee, use_aik)
-    ik_ok = target_joints is not None
-
-    T = dist / speed if speed > 0 else 0
-    n_steps = max(1, int(T / DT))
-
-    max_delta = None
-    if ik_ok:
-        max_delta = float(max(abs(np.rad2deg(target_joints[j] - curr_joints[j])) for j in range(len(curr_joints))))
-
-    return {
-        "status": "sim",
-        "ik": "AIK" if use_aik else "NIK",
-        "traj": traj_method,
-        "dist_mm": round(dist * 1000, 2),
-        "n_steps": n_steps,
-        "est_time_s": round(T, 3),
-        "start": [round(curr_ee.x, 4), round(curr_ee.y, 4), round(curr_ee.z, 4)],
-        "target": [round(x_m, 4), round(y_m, 4), round(z_m, 4)],
-        "ik_ok": ik_ok,
-        "max_joint_delta_deg": round(max_delta, 2) if max_delta is not None else None,
-    }
+def move_to_traj_joints(q_target, speed, traj_method):
+    global curr_joints
+    q0 = np.array(curr_joints)
+    qf = np.array(q_target)
+    dist = np.linalg.norm(qf - q0)
+    if dist < 0.001:
+        return
+    T = max(dist / speed, DT * 2)
+    nsteps = max(2, int(T / DT))
+    ndof = len(q0)
+    if traj_method == "Quintic":
+        gen = QuinticPolynomial(ndof=ndof)
+    elif traj_method == "Trapezoidal":
+        gen = TrapezoidalTrajectory(ndof=ndof)
+    else:
+        gen = CubicPolynomial(ndof=ndof)
+    gen.solve(q0, qf, None, None, T)
+    t_arr, X = gen.generate(t0=0, tf=T, nsteps=nsteps)
+    for k in range(nsteps):
+        if not running or _move_cancel:
+            break
+        curr_joints = X[:, 0, k].tolist()
+        push_joints(curr_joints)
+        time.sleep(T / nsteps)
 
 
 def handle(conn):
-    global robot, model, curr_joints
+    global curr_joints, running
 
-    robot = HiwonderRobot()
-    model = FiveDOFRobot()
-    curr_joints = [np.deg2rad(j) for j in robot.get_joint_values()[:5]]
+    curr_joints = HOME_JOINTS_RAD[:]
+    push_joints(curr_joints)
 
     home_ee, _ = model.calc_forward_kinematics(curr_joints)
-    print(f"[SERVER] Home EE: x={home_ee.x:.4f}  y={home_ee.y:.4f}  z={home_ee.z:.4f}")
+    print(f"[SIM] Home EE: x={home_ee.x:.4f}  y={home_ee.y:.4f}  z={home_ee.z:.4f}")
 
     buf = ""
     try:
         while True:
-            data = conn.recv(4096).decode()
+            ready, _, _ = select.select([conn], [], [], 0.02)
+            if not ready:
+                continue
+            try:
+                data = conn.recv(4096).decode()
+            except Exception:
+                break
             if not data:
                 break
             buf += data
@@ -124,90 +178,124 @@ def handle(conn):
                 line, buf = buf.split("\n", 1)
                 msg = json.loads(line)
 
-                if msg["cmd"] == "home":
-                    robot.move_to_home_position()
-                    time.sleep(0.5)
-                    curr_joints = [np.deg2rad(j) for j in robot.get_joint_values()[:5]]
+                if msg["cmd"] == "stop":
+                    _cancel_move()
+                    conn.sendall(b'{"status":"stopped"}\n')
+
+                elif msg["cmd"] == "home":
+                    _cancel_move()
+                    curr_joints = HOME_JOINTS_RAD[:]
+                    push_joints(curr_joints)
                     conn.sendall(b'{"status":"homed"}\n')
 
-                elif msg["cmd"] == "gripper":
-                    global gripper_angle
-                    width = msg.get("width", None)
-                    if width is not None:
-                        gripper_angle = float(width)
-                        robot.set_gripper(gripper_angle)
-                    elif msg["action"] == "open":
-                        gripper_angle = robot.open_gripper_angle
-                        robot.open_gripper()
-                    else:
-                        gripper_angle = robot.close_gripper_angle
-                        robot.close_gripper()
-                    conn.sendall(b'{"status":"done"}\n')
-
-                elif msg["cmd"] == "simulate":
-                    x_m = msg["x_mm"] / 1000.0
-                    y_m = msg["y_mm"] / 1000.0
-                    z_m = msg["z_mm"] / 1000.0
+                elif msg["cmd"] == "move_xyz":
+                    _cancel_move()
+                    x_m, y_m, z_m = remap(msg["x_mm"], msg["y_mm"], msg["z_mm"])
                     speed = msg["speed_mms"] / 1000.0
-                    result = simulate(x_m, y_m, z_m, speed, msg["use_aik"], msg["traj_method"])
-                    conn.sendall((json.dumps(result) + "\n").encode())
+                    use_aik = msg["use_aik"]
+                    traj_method = msg.get("traj_method", "Trapezoidal")
+                    print(f"[SIM] move_xyz -> x={x_m:.4f}  y={y_m:.4f}  z={z_m:.4f}  traj={traj_method}")
+                    def _do_xyz(x_m=x_m, y_m=y_m, z_m=z_m, speed=speed, use_aik=use_aik, traj_method=traj_method):
+                        global _move_cancel
+                        _move_cancel = False
+                        move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method)
+                        final_ee, _ = model.calc_forward_kinematics(curr_joints)
+                        print(f"[SIM] joints -> {[round(np.rad2deg(j), 2) for j in curr_joints]}")
+                        print(f"[SIM] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
+                        conn.sendall(b'{"status":"done"}\n')
+                    threading.Thread(target=_do_xyz, daemon=True).start()
 
                 elif msg["cmd"] == "move_joints":
-                    target_joints = [np.deg2rad(j) for j in msg["joints"]]
+                    _cancel_move()
+                    joints_deg = msg["joints"]
                     speed = msg["speed_mms"] / 1000.0
-                    traj_method = msg["traj_method"]
-                    print(f"[SERVER] move_joints -> {msg['joints']}")
-                    ndof = len(curr_joints)
-                    curr_ee, _ = model.calc_forward_kinematics(curr_joints)
-                    target_ee, _ = model.calc_forward_kinematics(target_joints)
-                    dist = math.sqrt((target_ee.x - curr_ee.x)**2 + (target_ee.y - curr_ee.y)**2 + (target_ee.z - curr_ee.z)**2)
-                    T = max(dist / speed, 0.5)
-                    traj = make_traj(traj_method, ndof)
-                    traj.solve(q0=curr_joints, qf=target_joints, qd0=None, qdf=None, T=T)
-                    n_steps = max(1, int(T / DT))
-                    t_arr, X = traj.generate(t0=0, tf=T, nsteps=n_steps)
-                    for i in range(n_steps):
-                        q = X[:, 0, i].tolist()
-                        if max(abs(np.rad2deg(q[j] - curr_joints[j])) for j in range(ndof)) > JOINT_DELTA_CLAMP_DEG:
-                            continue
-                        curr_joints = q
-                        robot.set_joint_values([np.rad2deg(j) for j in curr_joints] + [gripper_angle], duration=DT, radians=False)
-                        time.sleep(DT)
-                    time.sleep(0.3)
-                    curr_joints = [np.deg2rad(j) for j in robot.get_joint_values()[:5]]
-                    final_ee, _ = model.calc_forward_kinematics(curr_joints)
-                    print(f"[SERVER] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
-                    conn.sendall(b'{"status":"done"}\n')
+                    traj_method = msg.get("traj_method", "Trapezoidal")
+                    q_target = [np.deg2rad(j) for j in joints_deg]
+                    print(f"[SIM] move_joints -> {joints_deg}  traj={traj_method}")
+                    def _do_joints(q_target=q_target, speed=speed, traj_method=traj_method):
+                        global _move_cancel
+                        _move_cancel = False
+                        move_to_traj_joints(q_target, speed, traj_method)
+                        final_ee, _ = model.calc_forward_kinematics(curr_joints)
+                        print(f"[SIM] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
+                        conn.sendall(b'{"status":"done"}\n')
+                    threading.Thread(target=_do_joints, daemon=True).start()
 
-                elif msg["cmd"] == "move_xyz":
-                    x_m = msg["x_mm"] / 1000.0
-                    y_m = msg["y_mm"] / 1000.0
-                    z_m = msg["z_mm"] / 1000.0
-                    speed = msg["speed_mms"] / 1000.0
-                    print(f"[SERVER] move_xyz -> x={x_m:.4f}  y={y_m:.4f}  z={z_m:.4f}  traj={msg['traj_method']}")
-                    move_to(x_m, y_m, z_m, speed, msg["use_aik"], msg["traj_method"])
-                    print(f"[SERVER] joints -> {[round(np.rad2deg(j), 2) for j in curr_joints]}")
+                elif msg["cmd"] in ("simulate", "set_posture", "gripper"):
                     conn.sendall(b'{"status":"done"}\n')
 
     except Exception as e:
-        print(f"[ERROR] {e}")
+        print(f"[SIM ERROR] {e}")
     finally:
-        robot.shutdown_robot()
         conn.close()
 
 
-def main():
+def socket_thread():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((HOST, PORT))
         s.listen(1)
-        print(f"[SERVER] Listening on port {PORT}...")
+        print(f"[SIM] Listening on {HOST}:{PORT} — connect GUI with host = 'localhost'")
         while True:
             conn, addr = s.accept()
-            print(f"[SERVER] Connected: {addr}")
+            print(f"[SIM] GUI connected: {addr}")
             handle(conn)
-            print("[SERVER] Client disconnected, waiting...")
+            print("[SIM] GUI disconnected, waiting...")
+
+
+def run_visualizer():
+    global model
+
+    model = FiveDOFRobot()
+    curr = HOME_JOINTS_RAD[:]
+
+    fig = plt.figure(figsize=(9, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    plt.ion()
+    plt.show()
+
+    threading.Thread(target=socket_thread, daemon=True).start()
+
+    link_line, = ax.plot([], [], [], 'k-', linewidth=3)
+    joint_dots, = ax.plot([], [], [], 'mo', markersize=10)
+    ee_dot, = ax.plot([], [], [], 'bo', markersize=8)
+    title = ax.set_title("")
+
+    ax.set_xlim(-0.65, 0.65)
+    ax.set_ylim(-0.65, 0.65)
+    ax.set_zlim(0, 0.8)
+    ax.set_xlabel('X [m]')
+    ax.set_ylabel('Y [m]')
+    ax.set_zlabel('Z [m]')
+
+    def redraw(joints_rad):
+        pts = get_joint_positions(joints_rad)
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        zs = [p[2] for p in pts]
+        link_line.set_data(xs, ys)
+        link_line.set_3d_properties(zs)
+        joint_dots.set_data(xs, ys)
+        joint_dots.set_3d_properties(zs)
+        ee_dot.set_data([xs[-1]], [ys[-1]])
+        ee_dot.set_3d_properties([zs[-1]])
+        ee, _ = model.calc_forward_kinematics(joints_rad)
+        degs = [round(np.rad2deg(j), 1) for j in joints_rad]
+        title.set_text(f"EE: ({ee.x:.3f}, {ee.y:.3f}, {ee.z:.3f}) m\nJoints (deg): {degs}")
+        fig.canvas.draw_idle()
+        fig.canvas.flush_events()
+
+    redraw(curr)
+
+    while plt.fignum_exists(fig.number):
+        try:
+            joints = plot_queue.get_nowait()
+            curr = joints
+            redraw(curr)
+        except queue.Empty:
+            pass
+        plt.pause(0.01)
 
 
 if __name__ == "__main__":
-    main()
+    run_visualizer()

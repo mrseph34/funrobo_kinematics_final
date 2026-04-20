@@ -15,7 +15,7 @@ import cv2
 import cv2
 import numpy as np
 
-video_id = 1 # this is setup-dependent and would need to change. Ranges from 0-10+
+video_id = 0 # this is setup-dependent and would need to change. Ranges from 0-10+
 cap = cv2.VideoCapture(video_id) 
     
 
@@ -26,7 +26,7 @@ while True:
 
         if cv2.waitKey(1) == ord('q'): # saves the current frame each time "q" is pressed
             print("Saving to frame.png")
-            frame_str = './img/img'+str(1)+'.png'
+            frame_str = './fun_kene_scripts/img/img'+str(1)+'.png'
             #frame_str = './img/calibration_imgs/calibration_img'+str(i)+'.png'
             cv2.imwrite(frame_str, frame)
             break
@@ -53,7 +53,7 @@ T = np.array([[0.9737, -0.1124, -0.1981, -0.0554],
 distortion = np.array([ -0.531, 0.5044, -0.006695, -0.001467, -0.3957])
 
 # Import aruco cube pic
-img = cv2.imread(frame, cv2.IMREAD_COLOR_RGB)
+img = cv2.imread(frame_str, cv2.IMREAD_COLOR_RGB)
 plt.imshow(img)
 
 #Undistort the frame using the parameters derived during calibration
@@ -85,7 +85,7 @@ print("Detected markers:", ids)
 #     plt.show()
 
 # Estimate Pose
-marker_length = 0.05 # Meters (actual size of your marker)
+marker_length = 0.0254 # Meters (actual size of your marker)
 
 if ids is not None:
     print("here")

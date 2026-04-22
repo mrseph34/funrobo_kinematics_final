@@ -12,6 +12,12 @@ PI_HOST = "192.168.16.154"
 PI_PORT = 9999
 MOVE_SPEED_MMS = 30
 
+# Pre-defined obstacle boxes: (x1_mm, y1_mm, z1_mm, x2_mm, y2_mm, z2_mm)
+# Two corners in mm matching the GUI XYZ coordinate space.
+INIT_BOXES = [
+    (-150, 0, -200, 150, 200, -100),
+]
+
 
 class ArmControlGUI:
     def __init__(self, root):
@@ -32,11 +38,14 @@ class ArmControlGUI:
 
         self.use_phi = tk.BooleanVar(value=False)
         self.phi_val = tk.StringVar(value="-1.57")
+        self.fight_obstacles = tk.BooleanVar(value=False)
 
         self._sim_enabled = tk.BooleanVar(value=False)
         self._sim_proc = None
         self._sim_sock = None
         self._sim_buf = ""
+
+        self._obstacles = list(INIT_BOXES)
 
         self._build_ui()
 
@@ -100,9 +109,14 @@ class ArmControlGUI:
         for txt, val in [("XYZ", True), ("Joints", False)]:
             tk.Radiobutton(mode_row, text=txt, variable=self.use_xyz, value=val,
                            bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
-                           activebackground=PANEL, font=("Courier", 9)).pack(side="left", padx=4)
+                           activebackground=PANEL, font=("Courier", 9),
+                           command=self._on_mode_change).pack(side="left", padx=4)
+        tk.Checkbutton(mode_row, text="Fight Obstacles", variable=self.fight_obstacles,
+                       bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
+                       activebackground=PANEL, font=("Courier", 9)).pack(side="right", padx=4)
 
-        xyz_row = ttk.Frame(panel, style="Dark.TFrame")
+        self.xyz_row = ttk.Frame(panel, style="Dark.TFrame")
+        xyz_row = self.xyz_row
         xyz_row.pack(fill="x", pady=4)
         self.xyz_entries = {}
         for label, default in [("X (mm)", "0"), ("Y (mm)", "233"), ("Z (mm)", "174")]:
@@ -115,7 +129,8 @@ class ArmControlGUI:
             entry.pack()
             self.xyz_entries[label[0]] = entry
 
-        joint_row = ttk.Frame(panel, style="Dark.TFrame")
+        self.joint_row = ttk.Frame(panel, style="Dark.TFrame")
+        joint_row = self.joint_row
         joint_row.pack(fill="x", pady=4)
         self.joint_entries = {}
         for i, default in enumerate([0, 0, 90, -30, 0], start=1):
@@ -128,7 +143,8 @@ class ArmControlGUI:
             entry.pack()
             self.joint_entries[i] = entry
 
-        speed_row = ttk.Frame(panel, style="Dark.TFrame")
+        self._speed_row = ttk.Frame(panel, style="Dark.TFrame")
+        speed_row = self._speed_row
         speed_row.pack(fill="x", pady=4)
         ttk.Label(speed_row, text="Speed (mm/s):", style="Dark.TLabel").pack(side="left")
         tk.Scale(speed_row, variable=self.speed_mms, from_=5, to=1000, resolution=5,
@@ -163,6 +179,81 @@ class ArmControlGUI:
                            bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
                            activebackground=PANEL, font=("Courier", 9)).pack(side="left", padx=4)
 
+        OBS_BG = "#1f2235"
+        OBS_INNER = "#252840"
+
+        obs_outer = tk.Frame(panel, bg=OBS_BG, bd=0, highlightthickness=1,
+                             highlightbackground="#3a3d55")
+        obs_outer.pack(fill="x", pady=(10, 4))
+
+        self._obs_open = False
+        obs_header = tk.Frame(obs_outer, bg=OBS_BG, cursor="hand2")
+        obs_header.pack(fill="x")
+        self._obs_arrow = tk.Label(obs_header, text="▶  OBSTACLES  (mm)", bg=OBS_BG,
+                                   fg="#aaaacc", font=("Courier", 9, "bold"), anchor="w",
+                                   padx=10, pady=6)
+        self._obs_arrow.pack(side="left", fill="x", expand=True)
+        self._obs_count_lbl = tk.Label(obs_header, text="0 boxes", bg=OBS_BG,
+                                       fg="#666688", font=("Courier", 8), padx=10)
+        self._obs_count_lbl.pack(side="right")
+
+        self._obs_body = tk.Frame(obs_outer, bg=OBS_INNER)
+
+        obs_list_frame = tk.Frame(self._obs_body, bg=OBS_INNER, padx=8, pady=6)
+        obs_list_frame.pack(fill="x")
+        scrollbar = tk.Scrollbar(obs_list_frame, orient="vertical", bg=OBS_INNER,
+                                 troughcolor="#1a1d2e", width=10)
+        self._obs_listbox = tk.Listbox(obs_list_frame, height=4, bg="#1a1d2e", fg="#c0c0e0",
+                                        selectbackground=ACC, selectforeground="#000",
+                                        font=("Courier", 8), bd=0, highlightthickness=0,
+                                        yscrollcommand=scrollbar.set, activestyle="none")
+        scrollbar.config(command=self._obs_listbox.yview)
+        scrollbar.pack(side="right", fill="y")
+        self._obs_listbox.pack(side="left", fill="x", expand=True)
+        for box in self._obstacles:
+            self._obs_listbox.insert("end", self._fmt_box(box))
+
+        obs_divider = tk.Frame(self._obs_body, bg="#2e3150", height=1)
+        obs_divider.pack(fill="x", padx=8)
+
+        obs_add_row = tk.Frame(self._obs_body, bg=OBS_INNER, padx=8, pady=6)
+        obs_add_row.pack(fill="x")
+        self._obs_entries = []
+        for lbl in ["x1", "y1", "z1", "x2", "y2", "z2"]:
+            col = tk.Frame(obs_add_row, bg=OBS_INNER)
+            col.pack(side="left", padx=3)
+            tk.Label(col, text=lbl, bg=OBS_INNER, fg="#8888aa",
+                     font=("Courier", 7)).pack()
+            e = tk.Entry(col, width=5, bg="#1a1d2e", fg="#e0e0ff",
+                         insertbackground=ACC, font=("Courier", 9), bd=0,
+                         justify="center", highlightthickness=1,
+                         highlightbackground="#3a3d55", highlightcolor=ACC)
+            e.pack()
+            self._obs_entries.append(e)
+
+        obs_btn_row = tk.Frame(self._obs_body, bg=OBS_INNER, padx=8)
+        obs_btn_row.pack(fill="x", pady=(0, 8))
+        ttk.Button(obs_btn_row, text="+ Add Box", style="Dim.TButton",
+                   command=self._obs_add).pack(side="left", padx=(0, 6))
+        ttk.Button(obs_btn_row, text="✕ Remove", style="Dim.TButton",
+                   command=self._obs_remove).pack(side="left")
+
+        def _toggle_obs(e=None):
+            self._obs_open = not self._obs_open
+            if self._obs_open:
+                self._obs_body.pack(fill="x")
+                self._obs_arrow.config(text="▼  OBSTACLES  (mm)")
+            else:
+                self._obs_body.pack_forget()
+                self._obs_arrow.config(text="▶  OBSTACLES  (mm)")
+        obs_header.bind("<Button-1>", _toggle_obs)
+        self._obs_arrow.bind("<Button-1>", _toggle_obs)
+        self._obs_count_lbl.bind("<Button-1>", _toggle_obs)
+        self._toggle_obs_count = lambda: self._obs_count_lbl.config(
+            text=f"{len(self._obstacles)} box{'es' if len(self._obstacles) != 1 else ''}"
+        )
+        self._toggle_obs_count()
+
         gripper_row = ttk.Frame(panel, style="Dark.TFrame")
         gripper_row.pack(fill="x", pady=4)
         ttk.Button(gripper_row, text="CLOSE E.E.", style="Dim.TButton",
@@ -186,12 +277,50 @@ class ArmControlGUI:
         tk.Label(outer, textvariable=self.status, bg=BG, fg="#888899",
                  font=("Courier", 9), anchor="w").pack(fill="x", pady=(12, 0))
 
+        self._on_mode_change()
+
+    def _fmt_box(self, box):
+        return "({:.0f},{:.0f},{:.0f}) → ({:.0f},{:.0f},{:.0f})".format(*box)
+
+    def _send_obstacles(self):
+        self._send({"cmd": "set_obstacles", "boxes": list(self._obstacles)})
+
+    def _obs_add(self):
+        try:
+            vals = [float(e.get()) for e in self._obs_entries]
+        except ValueError:
+            messagebox.showerror("Invalid input", "All 6 fields must be numbers.")
+            return
+        box = tuple(vals)
+        self._obstacles.append(box)
+        self._obs_listbox.insert("end", self._fmt_box(box))
+        self._toggle_obs_count()
+        self._send_obstacles()
+
+    def _obs_remove(self):
+        sel = self._obs_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        self._obstacles.pop(idx)
+        self._obs_listbox.delete(idx)
+        self._toggle_obs_count()
+        self._send_obstacles()
+
     def _on_ik_change(self):
         aik = self.use_aik.get()
         state = "normal" if aik and self.use_phi.get() else "disabled"
         phi_state = "normal" if aik else "disabled"
         self.phi_entry.config(state=state)
         self.phi_check.config(state=phi_state)
+
+    def _on_mode_change(self):
+        if self.use_xyz.get():
+            self.joint_row.pack_forget()
+            self.xyz_row.pack(fill="x", pady=4, before=self._speed_row)
+        else:
+            self.xyz_row.pack_forget()
+            self.joint_row.pack(fill="x", pady=4, before=self._speed_row)
 
     def _get_phi(self):
         if not self.use_aik.get() or not self.use_phi.get():
@@ -237,6 +366,7 @@ class ArmControlGUI:
                         self.status.get().replace("Not connected", "Not connected") or self.status.get()
                     ))
                     threading.Thread(target=self._listen_sim, daemon=True).start()
+                    self.root.after(0, self._send_obstacles)
                     return
                 except Exception:
                     pass
@@ -284,6 +414,7 @@ class ArmControlGUI:
             self.conn_badge.config(text="● connected", fg="#00ff88")
             self.status.set(f"Connected to {self.pi_host.get()}")
             threading.Thread(target=self._listen, daemon=True).start()
+            self._send_obstacles()
         except Exception as e:
             self.status.set(f"Connection failed: {e}")
 
@@ -363,6 +494,7 @@ class ArmControlGUI:
             "use_aik": self.use_aik.get(),
             "phi_d": self._get_phi(),
             "traj_method": self.traj_method.get(),
+            "fight_obstacles": self.fight_obstacles.get(),
         }):
             self.status.set("Moving to dropoff...")
 
@@ -379,6 +511,7 @@ class ArmControlGUI:
                 "use_aik": self.use_aik.get(),
                 "phi_d": self._get_phi(),
                 "traj_method": self.traj_method.get(),
+                "fight_obstacles": self.fight_obstacles.get(),
             }):
                 self.status.set(f"Moving to X={x:.1f}  Y={y:.1f}  Z={z:.1f} mm...")
         else:
@@ -392,6 +525,7 @@ class ArmControlGUI:
                 "joints": joints,
                 "speed_mms": self.speed_mms.get(),
                 "traj_method": self.traj_method.get(),
+                "fight_obstacles": self.fight_obstacles.get(),
             }):
                 self.status.set(f"Moving to joints {joints}...")
 

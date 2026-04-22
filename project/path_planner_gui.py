@@ -3,6 +3,10 @@ from tkinter import ttk, messagebox
 import socket
 import json
 import threading
+import subprocess
+import sys
+import time
+import os
 
 PI_HOST = "192.168.16.154"
 PI_PORT = 9999
@@ -24,6 +28,11 @@ class ArmControlGUI:
         self.traj_method = tk.StringVar(value="Trapezoidal")
         self.use_xyz = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="Not connected — click Connect")
+
+        self._sim_enabled = tk.BooleanVar(value=False)
+        self._sim_proc = None
+        self._sim_sock = None
+        self._sim_buf = ""
 
         self._build_ui()
 
@@ -64,6 +73,10 @@ class ArmControlGUI:
         ttk.Label(conn_row, text="Pi host:", style="Dark.TLabel").pack(side="left")
         tk.Entry(conn_row, textvariable=self.pi_host, width=16, bg="#2a2d3d", fg=TXT,
                  insertbackground=ACC, font=("Courier", 10), bd=0).pack(side="left", padx=6)
+        tk.Checkbutton(conn_row, text="Simulate", variable=self._sim_enabled,
+                       bg=PANEL, fg=TXT, selectcolor="#2a2d3d", activebackground=PANEL,
+                       activeforeground=TXT, font=("Courier", 9),
+                       command=self._on_sim_toggle).pack(side="right", padx=4)
 
         btn_row = ttk.Frame(panel, style="Dark.TFrame")
         btn_row.pack(fill="x", pady=4)
@@ -159,6 +172,77 @@ class ArmControlGUI:
         tk.Label(outer, textvariable=self.status, bg=BG, fg="#888899",
                  font=("Courier", 9), anchor="w").pack(fill="x", pady=(12, 0))
 
+    def _on_sim_toggle(self):
+        if self._sim_enabled.get():
+            self._start_sim()
+        else:
+            self._stop_sim()
+
+    def _start_sim(self):
+        if self._sim_proc is not None:
+            return
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            examples_dir = os.path.join(os.path.dirname(script_dir), "examples")
+            env = os.environ.copy()
+            env["PYTHONPATH"] = script_dir + os.pathsep + examples_dir + os.pathsep + env.get("PYTHONPATH", "")
+            self._sim_proc = subprocess.Popen(
+                [sys.executable, os.path.join(script_dir, "pp_local_server.py")],
+                cwd=script_dir,
+                env=env,
+            )
+        except Exception as e:
+            self.status.set(f"Sim launch failed: {e}")
+            self._sim_enabled.set(False)
+            return
+
+        def _connect_sim():
+            for _ in range(20):
+                time.sleep(0.3)
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.connect(("localhost", PI_PORT))
+                    s.settimeout(0.1)
+                    self._sim_sock = s
+                    self.root.after(0, lambda: self.status.set(
+                        self.status.get().replace("Not connected", "Not connected") or self.status.get()
+                    ))
+                    threading.Thread(target=self._listen_sim, daemon=True).start()
+                    return
+                except Exception:
+                    pass
+            self.root.after(0, lambda: self.status.set("Sim failed to start"))
+            self._sim_enabled.set(False)
+
+        threading.Thread(target=_connect_sim, daemon=True).start()
+
+    def _stop_sim(self):
+        if self._sim_sock:
+            try:
+                self._sim_sock.close()
+            except Exception:
+                pass
+            self._sim_sock = None
+        if self._sim_proc:
+            self._sim_proc.terminate()
+            self._sim_proc = None
+
+    def _listen_sim(self):
+        while self._sim_sock:
+            try:
+                data = self._sim_sock.recv(4096).decode()
+                if data:
+                    self._sim_buf += data
+                    while "\n" in self._sim_buf:
+                        line, self._sim_buf = self._sim_buf.split("\n", 1)
+                        msg = json.loads(line)
+                        if msg.get("status") == "sim":
+                            self._print_sim(msg)
+            except socket.timeout:
+                continue
+            except Exception:
+                break
+
     def _connect(self):
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -216,10 +300,17 @@ class ArmControlGUI:
         self.status.set(f"Sim: {msg['est_time_s']:.2f}s  |  {msg['n_steps']} steps  |  {msg['ik']}  |  {msg['traj']}")
 
     def _send(self, msg):
-        if not self.sock:
-            messagebox.showerror("Not connected", "Connect to the Pi first.")
+        if not self.sock and not self._sim_sock:
+            messagebox.showerror("Not connected", "Connect to the Pi or enable Simulate first.")
             return False
-        self.sock.sendall((json.dumps(msg) + "\n").encode())
+        data = (json.dumps(msg) + "\n").encode()
+        if self.sock:
+            self.sock.sendall(data)
+        if self._sim_sock:
+            try:
+                self._sim_sock.sendall(data)
+            except Exception:
+                pass
         return True
 
     def _get_xyz(self):

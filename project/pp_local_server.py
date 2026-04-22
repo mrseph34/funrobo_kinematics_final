@@ -60,7 +60,7 @@ def solve_ik(ee, use_aik):
         result = model.calc_inverse_kinematics(ee, seed)
     else:
         result = model._newton_raphson_step(
-            seed, np.array([ee.x, ee.y, ee.z]), tol=0.001, max_iter=30
+            seed, np.array([ee.x, ee.y, ee.z]), tol=0.001, ilimit=30
         )
     return None if (result is None or len(result) == 0) else result
 
@@ -155,6 +155,7 @@ def move_to_traj_joints(q_target, speed, traj_method):
 def handle(conn):
     global curr_joints, running
 
+    running = True
     curr_joints = HOME_JOINTS_RAD[:]
     push_joints(curr_joints)
 
@@ -227,6 +228,7 @@ def handle(conn):
     except Exception as e:
         print(f"[SIM ERROR] {e}")
     finally:
+        running = False
         conn.close()
 
 
@@ -253,6 +255,10 @@ def run_visualizer():
     ax = fig.add_subplot(111, projection='3d')
     plt.ion()
     plt.show()
+    try:
+        fig.canvas.manager.window.wm_geometry("+820+40")
+    except Exception:
+        pass
 
     threading.Thread(target=socket_thread, daemon=True).start()
 

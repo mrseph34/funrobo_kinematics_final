@@ -23,7 +23,6 @@ class ArmControlGUI:
         self.speed_mms = tk.DoubleVar(value=MOVE_SPEED_MMS)
         self.traj_method = tk.StringVar(value="Trapezoidal")
         self.use_xyz = tk.BooleanVar(value=True)
-        self.inverted = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Not connected — click Connect")
 
         self._build_ui()
@@ -136,15 +135,6 @@ class ArmControlGUI:
             tk.Radiobutton(traj_row, text=txt, variable=self.traj_method, value=txt,
                            bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
                            activebackground=PANEL, font=("Courier", 9)).pack(side="left", padx=4)
-
-        posture_row = ttk.Frame(panel, style="Dark.TFrame")
-        posture_row.pack(fill="x", pady=4)
-        ttk.Label(posture_row, text="Posture:", style="Dark.TLabel").pack(side="left")
-        for txt, val in [("Normal", False), ("Inverted", True)]:
-            tk.Radiobutton(posture_row, text=txt, variable=self.inverted, value=val,
-                           bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
-                           activebackground=PANEL, font=("Courier", 9),
-                           command=self._send_posture).pack(side="left", padx=4)
 
         gripper_row = ttk.Frame(panel, style="Dark.TFrame")
         gripper_row.pack(fill="x", pady=4)
@@ -278,9 +268,6 @@ class ArmControlGUI:
                 "traj_method": self.traj_method.get(),
             }):
                 self.status.set(f"Moving to joints {joints}...")
-
-    def _send_posture(self):
-        self._send({"cmd": "set_posture", "inverted": self.inverted.get()})
 
     def _open_gripper(self):
         if self._send({"cmd": "gripper", "action": "open", "width": -100}):

@@ -221,7 +221,7 @@ def handle(conn):
                         conn.sendall(b'{"status":"done"}\n')
                     threading.Thread(target=_do_joints, daemon=True).start()
 
-                elif msg["cmd"] in ("simulate", "set_posture", "gripper"):
+                elif msg["cmd"] in ("simulate", "gripper"):
                     conn.sendall(b'{"status":"done"}\n')
 
     except Exception as e:

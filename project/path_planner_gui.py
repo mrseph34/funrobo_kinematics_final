@@ -17,6 +17,7 @@ class ArmControlGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("5-DOF Arm Control")
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.configure(bg="#0f1117")
         self.root.resizable(False, False)
 
@@ -28,6 +29,9 @@ class ArmControlGUI:
         self.traj_method = tk.StringVar(value="Trapezoidal")
         self.use_xyz = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="Not connected — click Connect")
+
+        self.use_phi = tk.BooleanVar(value=False)
+        self.phi_val = tk.StringVar(value="-1.57")
 
         self._sim_enabled = tk.BooleanVar(value=False)
         self._sim_proc = None
@@ -139,7 +143,17 @@ class ArmControlGUI:
         for txt, val in [("AIK", True), ("NIK", False)]:
             tk.Radiobutton(ik_row, text=txt, variable=self.use_aik, value=val,
                            bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
-                           activebackground=PANEL, font=("Courier", 9)).pack(side="left", padx=4)
+                           activebackground=PANEL, font=("Courier", 9),
+                           command=self._on_ik_change).pack(side="left", padx=4)
+        self.phi_entry = tk.Entry(ik_row, textvariable=self.phi_val, width=6,
+                                   bg="#2a2d3d", fg=TXT, insertbackground=ACC,
+                                   font=("Courier", 10), bd=0, justify="center")
+        self.phi_entry.pack(side="right", padx=(0, 4))
+        self.phi_check = tk.Checkbutton(ik_row, text="Pitch:", variable=self.use_phi,
+                                         bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
+                                         activebackground=PANEL, activeforeground=TXT,
+                                         font=("Courier", 9), command=self._on_ik_change)
+        self.phi_check.pack(side="right", padx=(8, 2))
 
         traj_row = ttk.Frame(panel, style="Dark.TFrame")
         traj_row.pack(fill="x", pady=4)
@@ -171,6 +185,21 @@ class ArmControlGUI:
 
         tk.Label(outer, textvariable=self.status, bg=BG, fg="#888899",
                  font=("Courier", 9), anchor="w").pack(fill="x", pady=(12, 0))
+
+    def _on_ik_change(self):
+        aik = self.use_aik.get()
+        state = "normal" if aik and self.use_phi.get() else "disabled"
+        phi_state = "normal" if aik else "disabled"
+        self.phi_entry.config(state=state)
+        self.phi_check.config(state=phi_state)
+
+    def _get_phi(self):
+        if not self.use_aik.get() or not self.use_phi.get():
+            return None
+        try:
+            return float(self.phi_val.get())
+        except ValueError:
+            return None
 
     def _on_sim_toggle(self):
         if self._sim_enabled.get():
@@ -216,6 +245,10 @@ class ArmControlGUI:
 
         threading.Thread(target=_connect_sim, daemon=True).start()
 
+    def _on_close(self):
+        self._stop_sim()
+        self.root.destroy()
+
     def _stop_sim(self):
         if self._sim_sock:
             try:
@@ -224,7 +257,7 @@ class ArmControlGUI:
                 pass
             self._sim_sock = None
         if self._sim_proc:
-            self._sim_proc.terminate()
+            self._sim_proc.kill()
             self._sim_proc = None
 
     def _listen_sim(self):
@@ -328,6 +361,7 @@ class ArmControlGUI:
             "x_mm": 0, "y_mm": 200, "z_mm": -150,
             "speed_mms": self.speed_mms.get(),
             "use_aik": self.use_aik.get(),
+            "phi_d": self._get_phi(),
             "traj_method": self.traj_method.get(),
         }):
             self.status.set("Moving to dropoff...")
@@ -343,6 +377,7 @@ class ArmControlGUI:
                 "x_mm": x, "y_mm": y, "z_mm": z,
                 "speed_mms": self.speed_mms.get(),
                 "use_aik": self.use_aik.get(),
+                "phi_d": self._get_phi(),
                 "traj_method": self.traj_method.get(),
             }):
                 self.status.set(f"Moving to X={x:.1f}  Y={y:.1f}  Z={z:.1f} mm...")

@@ -54,10 +54,10 @@ def make_ee(x, y, z):
     return ee
 
 
-def solve_ik(ee, use_aik):
+def solve_ik(ee, use_aik, phi_d=None):
     seed = [0.0, 0.0, 0.0, 0.0, 0.0]
     if use_aik:
-        result = model.calc_inverse_kinematics(ee, seed)
+        result = model.calc_inverse_kinematics(ee, seed, phi_d=phi_d)
     else:
         result = model._newton_raphson_step(
             seed, np.array([ee.x, ee.y, ee.z]), tol=0.001, ilimit=30
@@ -87,7 +87,7 @@ def _cancel_move():
         _move_thread.join(timeout=0.3)
 
 
-def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method):
+def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method, phi_d=None):
     global curr_joints
     curr_ee, _ = model.calc_forward_kinematics(curr_joints)
     dx = x_m - curr_ee.x
@@ -101,7 +101,7 @@ def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method):
     nsteps = max(2, int(T / DT))
 
     q0 = np.array(curr_joints)
-    qf_list = solve_ik(make_ee(x_m, y_m, z_m), use_aik)
+    qf_list = solve_ik(make_ee(x_m, y_m, z_m), use_aik, phi_d=phi_d)
     if qf_list is None or len(qf_list) == 0:
         print(f"[SIM] IK failed for ({x_m:.4f}, {y_m:.4f}, {z_m:.4f})")
         return
@@ -195,11 +195,12 @@ def handle(conn):
                     speed = msg["speed_mms"] / 1000.0
                     use_aik = msg["use_aik"]
                     traj_method = msg.get("traj_method", "Trapezoidal")
+                    phi_d = msg.get("phi_d", None)
                     print(f"[SIM] move_xyz -> x={x_m:.4f}  y={y_m:.4f}  z={z_m:.4f}  traj={traj_method}")
-                    def _do_xyz(x_m=x_m, y_m=y_m, z_m=z_m, speed=speed, use_aik=use_aik, traj_method=traj_method):
+                    def _do_xyz(x_m=x_m, y_m=y_m, z_m=z_m, speed=speed, use_aik=use_aik, traj_method=traj_method, phi_d=phi_d):
                         global _move_cancel
                         _move_cancel = False
-                        move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method)
+                        move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method, phi_d=phi_d)
                         final_ee, _ = model.calc_forward_kinematics(curr_joints)
                         print(f"[SIM] joints -> {[round(np.rad2deg(j), 2) for j in curr_joints]}")
                         print(f"[SIM] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")

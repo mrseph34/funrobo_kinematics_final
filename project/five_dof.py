@@ -134,7 +134,10 @@ class FiveDOFRobot(FiveDOFRobotTemplate):
         phi_g = np.arctan2(r_ee, z - self.l1)
         phi_seed = init_joint_values[1] - init_joint_values[2] + init_joint_values[3]
         geo_seeds = [phi_g, -phi_g, phi_g + np.pi, phi_g - np.pi, -phi_g + np.pi, -phi_g - np.pi]
-        phi_list = geo_seeds + [phi_seed] + list(np.linspace(-np.pi, np.pi, 36, endpoint=False))
+        if phi_d is not None:
+            phi_list = [phi_d] + geo_seeds + [phi_seed] + list(np.linspace(-np.pi, np.pi, 36, endpoint=False))
+        else:
+            phi_list = geo_seeds + [phi_seed] + list(np.linspace(-np.pi, np.pi, 36, endpoint=False))
 
         solutions = []
         for r_sign in [1, -1]:
@@ -148,7 +151,10 @@ class FiveDOFRobot(FiveDOFRobotTemplate):
             return []
 
         q0 = np.array(init_joint_values[:self.num_dof])
-        best = min(solutions, key=lambda s: np.linalg.norm(np.array(s) - q0))
+        if phi_d is not None:
+            best = min(solutions, key=lambda s: abs((s[1] - s[2] + s[3]) - phi_d))
+        else:
+            best = min(solutions, key=lambda s: np.linalg.norm(np.array(s) - q0))
         return best
 
     def _newton_raphson_step(self, q, target, tol, ilimit):

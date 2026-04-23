@@ -9,8 +9,11 @@ Make it Permanent:
 echo 'export PYTHONPATH=$PYTHONPATH:/home/pi' >> ~/.bashrc
 source ~/.bashrc
 
-Run it: 
+Activate Conda: 
 conda activate funrobo_hw
+
+Run it:
+
 python /home/pi/funrobo_kinematics_final/project/path_planner_server.py
 
 # funrobo_kinematics

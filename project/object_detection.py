@@ -60,7 +60,7 @@ class ArucoCameraTracker:
         """
         Waits for delay_sec seconds, captures a frame, and saves it
         """
-        print(f"📷 Waiting {delay_sec} seconds before capturing frame...")
+        print(f"Waiting {delay_sec} seconds before capturing frame...")
         time.sleep(delay_sec)
 
         ret, self.frame = self.cap.read()

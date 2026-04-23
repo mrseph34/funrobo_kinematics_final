@@ -15,7 +15,7 @@ MOVE_SPEED_MMS = 30
 # Pre-defined obstacle boxes: (x1_mm, y1_mm, z1_mm, x2_mm, y2_mm, z2_mm)
 # Two corners in mm matching the GUI XYZ coordinate space.
 INIT_BOXES = [
-    (-150, 0, -200, 150, 200, -100),
+    (-100, 0, -200, 100, 100, -100),
 ]
 
 
@@ -42,6 +42,7 @@ class ArmControlGUI:
 
         self._sim_enabled = tk.BooleanVar(value=False)
         self._sim_proc = None
+        self._sim_viz_proc = None
         self._sim_sock = None
         self._sim_buf = ""
 
@@ -86,10 +87,12 @@ class ArmControlGUI:
         ttk.Label(conn_row, text="Pi host:", style="Dark.TLabel").pack(side="left")
         tk.Entry(conn_row, textvariable=self.pi_host, width=16, bg="#2a2d3d", fg=TXT,
                  insertbackground=ACC, font=("Courier", 10), bd=0).pack(side="left", padx=6)
-        tk.Checkbutton(conn_row, text="Simulate", variable=self._sim_enabled,
+        sim_col = ttk.Frame(conn_row, style="Dark.TFrame")
+        sim_col.pack(side="right", padx=4)
+        tk.Checkbutton(sim_col, text="Simulate", variable=self._sim_enabled,
                        bg=PANEL, fg=TXT, selectcolor="#2a2d3d", activebackground=PANEL,
                        activeforeground=TXT, font=("Courier", 9),
-                       command=self._on_sim_toggle).pack(side="right", padx=4)
+                       command=self._on_sim_toggle).pack(anchor="e")
 
         btn_row = ttk.Frame(panel, style="Dark.TFrame")
         btn_row.pack(fill="x", pady=4)
@@ -97,6 +100,8 @@ class ArmControlGUI:
                    command=self._connect).pack(side="left", padx=(0, 4))
         ttk.Button(btn_row, text="Disconnect", style="Dim.TButton",
                    command=self._disconnect).pack(side="left")
+        ttk.Button(btn_row, text="Refresh Motion", style="Dim.TButton",
+                   command=self._refresh_motion, width=14).pack(side="right")
 
         self.conn_badge = tk.Label(panel, text="● disconnected", bg=PANEL, fg="#ff4466",
                                    font=("Courier", 9, "bold"))
@@ -344,10 +349,13 @@ class ArmControlGUI:
             examples_dir = os.path.join(os.path.dirname(script_dir), "examples")
             env = os.environ.copy()
             env["PYTHONPATH"] = script_dir + os.pathsep + examples_dir + os.pathsep + env.get("PYTHONPATH", "")
-            self._sim_proc = subprocess.Popen(
+            self._sim_viz_proc = subprocess.Popen(
                 [sys.executable, os.path.join(script_dir, "pp_local_server.py")],
-                cwd=script_dir,
-                env=env,
+                cwd=script_dir, env=env,
+            )
+            self._sim_proc = subprocess.Popen(
+                [sys.executable, os.path.join(script_dir, "path_planner_motion.py")],
+                cwd=script_dir, env=env,
             )
         except Exception as e:
             self.status.set(f"Sim launch failed: {e}")
@@ -362,11 +370,10 @@ class ArmControlGUI:
                     s.connect(("localhost", PI_PORT))
                     s.settimeout(0.1)
                     self._sim_sock = s
-                    self.root.after(0, lambda: self.status.set(
-                        self.status.get().replace("Not connected", "Not connected") or self.status.get()
-                    ))
+                    self.root.after(0, lambda: self.status.set("Simulator running."))
                     threading.Thread(target=self._listen_sim, daemon=True).start()
                     self.root.after(0, self._send_obstacles)
+                    self.root.after(500, self._poll_sim)
                     return
                 except Exception:
                     pass
@@ -375,8 +382,24 @@ class ArmControlGUI:
 
         threading.Thread(target=_connect_sim, daemon=True).start()
 
+    def _poll_sim(self):
+        if self._sim_viz_proc is None:
+            return
+        viz_dead = self._sim_viz_proc.poll() is not None
+        if viz_dead:
+            self._stop_sim()
+            self._sim_enabled.set(False)
+            self.status.set("Simulator stopped.")
+            return
+        self.root.after(500, self._poll_sim)
+
     def _on_close(self):
         self._stop_sim()
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
         self.root.destroy()
 
     def _stop_sim(self):
@@ -389,6 +412,9 @@ class ArmControlGUI:
         if self._sim_proc:
             self._sim_proc.kill()
             self._sim_proc = None
+        if self._sim_viz_proc:
+            self._sim_viz_proc.kill()
+            self._sim_viz_proc = None
 
     def _listen_sim(self):
         while self._sim_sock:
@@ -401,22 +427,65 @@ class ArmControlGUI:
                         msg = json.loads(line)
                         if msg.get("status") == "sim":
                             self._print_sim(msg)
+                else:
+                    break
             except socket.timeout:
+                if self._sim_proc is not None and self._sim_proc.poll() is not None:
+                    break
                 continue
             except Exception:
                 break
+        if self._sim_sock:
+            try:
+                self._sim_sock.close()
+            except Exception:
+                pass
+            self._sim_sock = None
+        # only uncheck if viz is also gone
+        viz_alive = self._sim_viz_proc is not None and self._sim_viz_proc.poll() is None
+        if not viz_alive:
+            self._sim_proc = None
+            self.root.after(0, lambda: self._sim_enabled.set(False))
+
+    def _reconnect_sim(self):
+        def _do():
+            for _ in range(20):
+                time.sleep(0.3)
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.connect(("localhost", PI_PORT))
+                    s.settimeout(0.1)
+                    self._sim_sock = s
+                    self.root.after(0, lambda: self.status.set("Motion server reconnected."))
+                    threading.Thread(target=self._listen_sim, daemon=True).start()
+                    self.root.after(0, self._send_obstacles)
+                    return
+                except Exception:
+                    pass
+            self.root.after(0, lambda: self.status.set("Motion reconnect failed."))
+        threading.Thread(target=_do, daemon=True).start()
+        self.root.after(0, lambda: self.status.set("Simulator stopped."))
 
     def _connect(self):
-        try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.connect((self.pi_host.get(), PI_PORT))
-            self.sock.settimeout(0.1)
-            self.conn_badge.config(text="● connected", fg="#00ff88")
-            self.status.set(f"Connected to {self.pi_host.get()}")
-            threading.Thread(target=self._listen, daemon=True).start()
-            self._send_obstacles()
-        except Exception as e:
-            self.status.set(f"Connection failed: {e}")
+        self.status.set("Connecting...")
+        self.conn_badge.config(text="● connecting…", fg="#ffaa00")
+        def _do_connect():
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(2.5)
+                s.connect((self.pi_host.get(), PI_PORT))
+                s.settimeout(0.1)
+                self.sock = s
+                self.root.after(0, lambda: self.conn_badge.config(text="● connected", fg="#00ff88"))
+                self.root.after(0, lambda: self.status.set(f"Connected to {self.pi_host.get()}"))
+                threading.Thread(target=self._listen, daemon=True).start()
+                self.root.after(0, self._send_obstacles)
+            except Exception as e:
+                self.sock = None
+                err = str(e)
+                self.root.after(0, lambda: self.conn_badge.config(text="● disconnected", fg="#ff4466"))
+                self.root.after(0, lambda: self.status.set(f"Connection failed: {err}"))
+        threading.Thread(target=_do_connect, daemon=True).start()
 
     def _disconnect(self):
         if self.sock:
@@ -424,6 +493,24 @@ class ArmControlGUI:
             self.sock = None
         self.conn_badge.config(text="● disconnected", fg="#ff4466")
         self.status.set("Disconnected.")
+
+    def _refresh_motion(self):
+        if self._sim_proc is not None:
+            self._sim_proc.kill()
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        examples_dir = os.path.join(os.path.dirname(script_dir), "examples")
+        python = sys.executable
+        env = os.environ.copy()
+        env["PYTHONPATH"] = script_dir + os.pathsep + examples_dir + os.pathsep + env.get("PYTHONPATH", "")
+        try:
+            self._sim_proc = subprocess.Popen(
+                [python, os.path.join(script_dir, "path_planner_motion.py")],
+                cwd=script_dir, env=env,
+            )
+            self.status.set("Motion server reloaded.")
+            self._reconnect_sim()
+        except Exception as e:
+            self.status.set(f"Refresh failed: {e}")
 
     def _listen(self):
         while self.sock:
@@ -435,17 +522,29 @@ class ArmControlGUI:
                         line, self.buf = self.buf.split("\n", 1)
                         msg = json.loads(line)
                         if msg.get("status") == "done":
+                            print(f"[GUI] recv: done")
                             self.status.set("Move complete.")
                         elif msg.get("status") == "homed":
+                            print(f"[GUI] recv: homed")
                             self.status.set("Homed.")
                         elif msg.get("status") == "sim":
                             self._print_sim(msg)
                         elif msg.get("status") == "error":
                             self.status.set(f"Error: {msg.get('msg', '')}")
+                else:
+                    break
             except socket.timeout:
                 continue
             except Exception:
                 break
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+        self.root.after(0, lambda: self.conn_badge.config(text="● disconnected", fg="#ff4466"))
+        self.root.after(0, lambda: self.status.set("Disconnected (connection lost)."))
 
     def _print_sim(self, msg):
         print("=" * 48)
@@ -464,17 +563,33 @@ class ArmControlGUI:
         self.status.set(f"Sim: {msg['est_time_s']:.2f}s  |  {msg['n_steps']} steps  |  {msg['ik']}  |  {msg['traj']}")
 
     def _send(self, msg):
-        if not self.sock and not self._sim_sock:
+        active = self._sim_sock or self.sock
+        if not active:
             messagebox.showerror("Not connected", "Connect to the Pi or enable Simulate first.")
             return False
+        target = "sim" if self._sim_sock else f"pi({self.pi_host.get()})"
+        print(f"[GUI] send -> {target}: {msg}")
         data = (json.dumps(msg) + "\n").encode()
-        if self.sock:
-            self.sock.sendall(data)
-        if self._sim_sock:
-            try:
-                self._sim_sock.sendall(data)
-            except Exception:
-                pass
+        try:
+            active.sendall(data)
+        except Exception as e:
+            print(f"[GUI] send error: {e}")
+        return True
+
+    def _send_atomic(self, stop_msg, move_msg):
+        active = self._sim_sock or self.sock
+        if not active:
+            messagebox.showerror("Not connected", "Connect to the Pi or enable Simulate first.")
+            return False
+        target = "sim" if self._sim_sock else f"pi({self.pi_host.get()})"
+        print(f"[GUI] send -> {target}: {stop_msg}")
+        print(f"[GUI] send -> {target}: {move_msg}")
+        data = (json.dumps(stop_msg) + "\n" + json.dumps(move_msg) + "\n").encode()
+        try:
+            active.sendall(data)
+        except Exception as e:
+            print(f"[GUI] send error: {e}")
+            return False
         return True
 
     def _get_xyz(self):
@@ -487,7 +602,8 @@ class ArmControlGUI:
             return None
 
     def _move_dropoff(self):
-        if self._send({
+        print(f"[GUI] _move_dropoff clicked speed={self.speed_mms.get()}mm/s")
+        if self._send_atomic({"cmd": "stop"}, {
             "cmd": "move_xyz",
             "x_mm": 0, "y_mm": 200, "z_mm": -150,
             "speed_mms": self.speed_mms.get(),
@@ -499,12 +615,13 @@ class ArmControlGUI:
             self.status.set("Moving to dropoff...")
 
     def _move_xyz(self):
+        print(f"[GUI] _move_xyz clicked mode={'xyz' if self.use_xyz.get() else 'joints'} speed={self.speed_mms.get()}mm/s")
         if self.use_xyz.get():
             xyz = self._get_xyz()
             if xyz is None:
                 return
             x, y, z = xyz
-            if self._send({
+            if self._send_atomic({"cmd": "stop"}, {
                 "cmd": "move_xyz",
                 "x_mm": x, "y_mm": y, "z_mm": z,
                 "speed_mms": self.speed_mms.get(),
@@ -520,7 +637,7 @@ class ArmControlGUI:
             except ValueError:
                 messagebox.showerror("Invalid input", "All joint angles must be numbers.")
                 return
-            if self._send({
+            if self._send_atomic({"cmd": "stop"}, {
                 "cmd": "move_joints",
                 "joints": joints,
                 "speed_mms": self.speed_mms.get(),
@@ -547,7 +664,8 @@ class ArmControlGUI:
             self.status.set(f"Gripper set to {abs(w)}...")
 
     def _home(self):
-        if self._send({"cmd": "home"}):
+        print(f"[GUI] _home clicked")
+        if self._send_atomic({"cmd": "stop"}, {"cmd": "home"}):
             self.status.set("Homing...")
 
 

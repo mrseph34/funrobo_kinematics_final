@@ -1,8 +1,7 @@
 """
 Path Planner Sim Server — runs locally on your laptop.
-Start this first, then connect the GUI with host = "localhost".
-
-Standalone matplotlib visualizer — no dependency on RobotSim/Visualizer.
+Dumb visualizer: only understands set_joints and set_obstacles.
+path_planner_motion.py connects to this and pushes joint states.
 """
 
 import sys
@@ -17,177 +16,43 @@ import threading
 import queue
 import select
 import numpy as np
-import math
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from traj_gen import CubicPolynomial, QuinticPolynomial, TrapezoidalTrajectory
 import funrobo_kinematics.core.utils as ut
 from five_dof import FiveDOFRobot
 
 HOST = "localhost"
-PORT = 9999
+PORT = 9997
 CONTROL_HZ = 20
 DT = 1.0 / CONTROL_HZ
-JOINT_DELTA_CLAMP_DEG = 15.0
 
 HOME_JOINTS_DEG = [0, 0, 90, -30, 0]
 HOME_JOINTS_RAD = [np.deg2rad(j) for j in HOME_JOINTS_DEG]
 
+_LINK_RADIUS = 0.03
+
 model = None
-curr_joints = None
-running = False
 plot_queue = queue.Queue()
-_move_gen = 0
-_obstacles = []  # list of (x1,y1,z1, x2,y2,z2) in robot frame meters
+_obstacles = []
 
-
-def _boxes_from_gui(boxes_mm):
-    """Convert GUI mm boxes to robot-frame meter boxes."""
-    result = []
-    for b in boxes_mm:
-        x1, y1, z1 = remap(b[0], b[1], b[2])
-        x2, y2, z2 = remap(b[3], b[4], b[5])
-        result.append((min(x1,x2), min(y1,y2), min(z1,z2), max(x1,x2), max(y1,y2), max(z1,z2)))
-    return result
-
-
-_LINK_RADIUS = 0.03  # 3 cm capsule radius per link
-
-
-def _seg_seg_dist(p1, p2, p3, p4):
-    """Minimum distance between two line segments p1-p2 and p3-p4."""
-    d1 = p2 - p1
-    d2 = p4 - p3
-    r = p1 - p3
-    a = np.dot(d1, d1)
-    e = np.dot(d2, d2)
-    f = np.dot(d2, r)
-    if a < 1e-10 and e < 1e-10:
-        return np.linalg.norm(r)
-    if a < 1e-10:
-        s, t = 0.0, np.clip(f / e, 0, 1)
-    else:
-        c = np.dot(d1, r)
-        if e < 1e-10:
-            s, t = np.clip(-c / a, 0, 1), 0.0
-        else:
-            b = np.dot(d1, d2)
-            denom = a * e - b * b
-            if abs(denom) > 1e-10:
-                s = np.clip((b * f - c * e) / denom, 0, 1)
-            else:
-                s = 0.0
-            t = (b * s + f) / e
-            if t < 0:
-                s, t = np.clip(-c / a, 0, 1), 0.0
-            elif t > 1:
-                s, t = np.clip((b - c) / a, 0, 1), 1.0
-    closest1 = p1 + s * d1
-    closest2 = p3 + t * d2
-    return np.linalg.norm(closest1 - closest2)
-
-
-def _self_collides(joints_rad):
-    """Check capsule self-collision between non-adjacent link segments."""
-    pts = [np.array(p) for p in model.get_joint_positions(joints_rad)]
-    for i in range(len(pts) - 1):
-        for j in range(i + 2, len(pts) - 1):
-            if _seg_seg_dist(pts[i], pts[i+1], pts[j], pts[j+1]) < 2 * _LINK_RADIUS:
-                return True
-    return False
-
-
-def _box_collides(joints_rad):
-    """Check link segments against GUI obstacle boxes."""
-    if not _obstacles:
-        return False
-    pts = [np.array(p) for p in model.get_joint_positions(joints_rad)]
-    for (x1, y1, z1, x2, y2, z2) in _obstacles:
-        cx, cy, cz = (x1+x2)/2, (y1+y2)/2, (z1+z2)/2
-        hx, hy, hz = abs(x2-x1)/2, abs(y2-y1)/2, abs(z2-z1)/2
-        for i in range(len(pts) - 1):
-            for t in np.linspace(0, 1, 8):
-                pt = pts[i] + t * (pts[i+1] - pts[i])
-                if (abs(pt[0]-cx) <= hx + _LINK_RADIUS and
-                        abs(pt[1]-cy) <= hy + _LINK_RADIUS and
-                        abs(pt[2]-cz) <= hz + _LINK_RADIUS):
-                    return True
-    return False
-
-
-def _collides(joints_rad):
-    return _self_collides(joints_rad) or _box_collides(joints_rad)
-
-
-def _rrt_plan(q_start, q_goal, fight=True, max_iter=2000, step=0.15):
-    """Simple RRT in joint space. Returns waypoint list or None if blocked and fight=False."""
-    if _collides(q_goal):
-        print(f"[RRT] Goal config is in collision — move aborted")
-        return [q_start, q_goal] if fight else None
-    if not _obstacles:
-        return [q_start, q_goal]
-    lims_lo = np.array([lim[0] for lim in model.joint_limits])
-    lims_hi = np.array([lim[1] for lim in model.joint_limits])
-    q_start = np.array(q_start)
-    q_goal = np.array(q_goal)
-    tree = [q_start]
-    parent = {0: -1}
-    for i in range(max_iter):
-        if np.random.rand() < 0.15:
-            q_rand = q_goal.copy()
-        else:
-            q_rand = np.random.uniform(lims_lo, lims_hi)
-        dists = [np.linalg.norm(q_rand - n) for n in tree]
-        nearest_idx = int(np.argmin(dists))
-        q_near = tree[nearest_idx]
-        direction = q_rand - q_near
-        norm = np.linalg.norm(direction)
-        if norm < 1e-6:
-            continue
-        q_new = q_near + step * direction / norm
-        q_new = np.clip(q_new, lims_lo, lims_hi)
-        if _collides(q_new.tolist()):
-            continue
-        tree.append(q_new)
-        new_idx = len(tree) - 1
-        parent[new_idx] = nearest_idx
-        if np.linalg.norm(q_new - q_goal) < step:
-            if not _collides(q_goal.tolist()):
-                tree.append(q_goal)
-                parent[len(tree)-1] = new_idx
-                path = []
-                idx = len(tree)-1
-                while idx != -1:
-                    path.append(tree[idx])
-                    idx = parent[idx]
-                path.reverse()
-                return path
-    print("[RRT] Failed to find collision-free path" + (", using direct" if fight else ", aborting"))
-    return [q_start, q_goal] if fight else None
+BOX_COLORS = ["#ff4466", "#ffaa00", "#00e5ff", "#aa44ff", "#44ff88", "#ff8800", "#ff44ff"]
 
 
 def remap(x_mm, y_mm, z_mm):
     return -z_mm / 1000.0, x_mm / 1000.0, y_mm / 1000.0
 
 
-def make_ee(x, y, z):
-    ee = ut.EndEffector()
-    ee.x, ee.y, ee.z = x, y, z
-    return ee
-
-
-def solve_ik(ee, use_aik, phi_d=None):
-    seed = [0.0, 0.0, 0.0, 0.0, 0.0]
-    if use_aik:
-        result = model.calc_inverse_kinematics(ee, seed, phi_d=phi_d)
-    else:
-        result = model._newton_raphson_step(
-            seed, np.array([ee.x, ee.y, ee.z]), tol=0.001, ilimit=30
-        )
-    return None if (result is None or len(result) == 0) else result
+def _boxes_from_gui(boxes_mm):
+    result = []
+    for b in boxes_mm:
+        x1, y1, z1 = remap(b[0], b[1], b[2])
+        x2, y2, z2 = remap(b[3], b[4], b[5])
+        result.append((min(x1,x2), min(y1,y2), min(z1,z2), max(x1,x2), max(y1,y2), max(z1,z2)))
+    return result
 
 
 def get_joint_positions(joints_rad):
@@ -201,111 +66,7 @@ def get_joint_positions(joints_rad):
     return pts
 
 
-def push_joints(joints_rad):
-    plot_queue.put(list(joints_rad))
-
-
-def _cancel_move():
-    global _move_gen
-    _move_gen += 1
-    # drain stale joint updates from the cancelled move
-    while not plot_queue.empty():
-        try:
-            plot_queue.get_nowait()
-        except Exception:
-            break
-
-
-def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method, phi_d=None, gen=0, fight=True):
-    global curr_joints
-    curr_ee, _ = model.calc_forward_kinematics(curr_joints)
-    dx = x_m - curr_ee.x
-    dy = y_m - curr_ee.y
-    dz = z_m - curr_ee.z
-    dist = math.sqrt(dx*dx + dy*dy + dz*dz)
-    if dist < 0.001:
-        return
-
-    qf_list = solve_ik(make_ee(x_m, y_m, z_m), use_aik, phi_d=phi_d)
-    if qf_list is None or len(qf_list) == 0:
-        print(f"[SIM] IK failed for ({x_m:.4f}, {y_m:.4f}, {z_m:.4f})")
-        return
-
-    waypoints = _rrt_plan(curr_joints, qf_list, fight=fight)
-    if waypoints is None:
-        print(f"[SIM] Blocked by obstacle, move aborted")
-        return
-
-    for wi in range(len(waypoints) - 1):
-        if not running or _move_gen != gen:
-            break
-        q0 = np.array(waypoints[wi])
-        qf = np.array(waypoints[wi + 1])
-        seg_dist = np.linalg.norm(qf - q0)
-        if seg_dist < 1e-4:
-            continue
-        T = max(seg_dist / speed, DT * 2)
-        nsteps = max(2, int(T / DT))
-        ndof = len(q0)
-        if traj_method.lower() == "quintic":
-            gen_ = QuinticPolynomial(ndof=ndof)
-        elif traj_method.lower() == "trapezoidal":
-            gen_ = TrapezoidalTrajectory(ndof=ndof)
-        else:
-            gen_ = CubicPolynomial(ndof=ndof)
-        gen_.solve(q0, qf, None, None, T)
-        t_arr, X = gen_.generate(t0=0, tf=T, nsteps=nsteps)
-        for k in range(nsteps):
-            if not running or _move_gen != gen:
-                break
-            curr_joints = X[:, 0, k].tolist()
-            push_joints(curr_joints)
-            time.sleep(T / nsteps)
-
-
-def move_to_traj_joints(q_target, speed, traj_method, gen=0, fight=True):
-    global curr_joints
-    waypoints = _rrt_plan(curr_joints, q_target, fight=fight)
-    if waypoints is None:
-        print(f"[SIM] Blocked by obstacle, move aborted")
-        return
-    for wi in range(len(waypoints) - 1):
-        if not running or _move_gen != gen:
-            break
-        q0 = np.array(waypoints[wi])
-        qf = np.array(waypoints[wi + 1])
-        dist = np.linalg.norm(qf - q0)
-        if dist < 1e-4:
-            continue
-        T = max(dist / speed, DT * 2)
-        nsteps = max(2, int(T / DT))
-        ndof = len(q0)
-        if traj_method == "Quintic":
-            gen_ = QuinticPolynomial(ndof=ndof)
-        elif traj_method == "Trapezoidal":
-            gen_ = TrapezoidalTrajectory(ndof=ndof)
-        else:
-            gen_ = CubicPolynomial(ndof=ndof)
-        gen_.solve(q0, qf, None, None, T)
-        t_arr, X = gen_.generate(t0=0, tf=T, nsteps=nsteps)
-        for k in range(nsteps):
-            if not running or _move_gen != gen:
-                break
-            curr_joints = X[:, 0, k].tolist()
-            push_joints(curr_joints)
-            time.sleep(T / nsteps)
-
-
 def handle(conn):
-    global curr_joints, running
-
-    running = True
-    curr_joints = HOME_JOINTS_RAD[:]
-    push_joints(curr_joints)
-
-    home_ee, _ = model.calc_forward_kinematics(curr_joints)
-    print(f"[SIM] Home EE: x={home_ee.x:.4f}  y={home_ee.y:.4f}  z={home_ee.z:.4f}")
-
     buf = ""
     try:
         while True:
@@ -323,65 +84,19 @@ def handle(conn):
                 line, buf = buf.split("\n", 1)
                 msg = json.loads(line)
 
-                if msg["cmd"] == "stop":
-                    _cancel_move()
-                    conn.sendall(b'{"status":"stopped"}\n')
-
-                elif msg["cmd"] == "home":
-                    _cancel_move()
-                    curr_joints = HOME_JOINTS_RAD[:]
-                    push_joints(curr_joints)
-                    conn.sendall(b'{"status":"homed"}\n')
-
-                elif msg["cmd"] == "move_xyz":
-                    _cancel_move()
-                    x_m, y_m, z_m = remap(msg["x_mm"], msg["y_mm"], msg["z_mm"])
-                    speed = msg["speed_mms"] / 1000.0 * 10
-                    use_aik = msg["use_aik"]
-                    traj_method = msg.get("traj_method", "Trapezoidal")
-                    phi_d = msg.get("phi_d", None)
-                    fight = msg.get("fight_obstacles", False)
-                    print(f"[SIM] move_xyz -> x={x_m:.4f}  y={y_m:.4f}  z={z_m:.4f}  traj={traj_method}")
-                    my_gen = _move_gen
-                    def _do_xyz(x_m=x_m, y_m=y_m, z_m=z_m, speed=speed, use_aik=use_aik, traj_method=traj_method, phi_d=phi_d, my_gen=my_gen, fight=fight):
-                        move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method, phi_d=phi_d, gen=my_gen, fight=fight)
-                        if _move_gen == my_gen:
-                            final_ee, _ = model.calc_forward_kinematics(curr_joints)
-                            print(f"[SIM] joints -> {[round(np.rad2deg(j), 2) for j in curr_joints]}")
-                            print(f"[SIM] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
-                            conn.sendall(b'{"status":"done"}\n')
-                    threading.Thread(target=_do_xyz, daemon=True).start()
-
-                elif msg["cmd"] == "move_joints":
-                    _cancel_move()
-                    joints_deg = msg["joints"]
-                    speed = msg["speed_mms"] / 1000.0 * 10
-                    traj_method = msg.get("traj_method", "Trapezoidal")
-                    q_target = [np.deg2rad(j) for j in joints_deg]
-                    fight = msg.get("fight_obstacles", False)
-                    print(f"[SIM] move_joints -> {joints_deg}  traj={traj_method}")
-                    my_gen = _move_gen
-                    def _do_joints(q_target=q_target, speed=speed, traj_method=traj_method, my_gen=my_gen, fight=fight):
-                        move_to_traj_joints(q_target, speed, traj_method, gen=my_gen, fight=fight)
-                        if _move_gen == my_gen:
-                            final_ee, _ = model.calc_forward_kinematics(curr_joints)
-                            print(f"[SIM] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
-                            conn.sendall(b'{"status":"done"}\n')
-                    threading.Thread(target=_do_joints, daemon=True).start()
-
-                elif msg["cmd"] in ("simulate", "gripper"):
-                    conn.sendall(b'{"status":"done"}\n')
+                if msg["cmd"] == "set_joints":
+                    joints_rad = [np.deg2rad(j) for j in msg["joints"]]
+                    plot_queue.put(list(joints_rad))
 
                 elif msg["cmd"] == "set_obstacles":
+                    raw = msg.get("boxes", [])
                     _obstacles.clear()
-                    _obstacles.extend(_boxes_from_gui(msg.get("boxes", [])))
+                    _obstacles.extend(_boxes_from_gui(raw))
                     plot_queue.put({"obstacles": list(_obstacles)})
-                    conn.sendall(b'{"status":"done"}\n')
 
     except Exception as e:
         print(f"[SIM ERROR] {e}")
     finally:
-        running = False
         conn.close()
 
 
@@ -390,17 +105,13 @@ def socket_thread():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((HOST, PORT))
         s.listen(1)
-        print(f"[SIM] Listening on {HOST}:{PORT} — connect GUI with host = 'localhost'")
+        print(f"[SIM] Listening on {HOST}:{PORT}")
         while True:
             conn, addr = s.accept()
-            print(f"[SIM] GUI connected: {addr}")
+            print(f"[SIM] Motion server connected: {addr}")
             handle(conn)
-            print("[SIM] GUI disconnected, waiting...")
+            print("[SIM] Motion server disconnected, waiting...")
 
-
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-
-BOX_COLORS = ["#ff4466", "#ffaa00", "#00e5ff", "#aa44ff", "#44ff88", "#ff8800", "#ff44ff"]
 
 def run_visualizer():
     global model
@@ -432,6 +143,7 @@ def run_visualizer():
     ax.set_zlabel('Z [m]')
 
     box_patches = []
+    link_patches = []
 
     def draw_boxes():
         for p in box_patches:
@@ -454,6 +166,65 @@ def run_visualizer():
             ax.add_collection3d(poly)
             box_patches.append(poly)
 
+    def draw_link_boxes(pts):
+        for p in link_patches:
+            try:
+                p.remove()
+            except Exception:
+                pass
+        link_patches.clear()
+        r = _LINK_RADIUS
+        for i in range(len(pts) - 1):
+            p0 = np.array(pts[i])
+            p1 = np.array(pts[i + 1])
+            seg = p1 - p0
+            length = np.linalg.norm(seg)
+            if length < 1e-6:
+                continue
+            axis = seg / length
+
+            # build rotation matrix: local z -> axis
+            z = np.array([0.0, 0.0, 1.0])
+            v = np.cross(z, axis)
+            c = np.dot(z, axis)
+            if np.linalg.norm(v) < 1e-8:
+                R = np.eye(3) if c > 0 else np.diag([1, -1, -1])
+            else:
+                vx = np.array([[0,-v[2],v[1]],[v[2],0,-v[0]],[-v[1],v[0],0]])
+                R = np.eye(3) + vx + vx @ vx * (1 / (1 + c))
+
+            # cylinder body
+            theta = np.linspace(0, 2*np.pi, 16)
+            zc = np.linspace(0, length, 8)
+            tc, zz = np.meshgrid(theta, zc)
+            xc = r * np.cos(tc)
+            yc = r * np.sin(tc)
+            shape = xc.shape
+            pts_local = np.stack([xc.ravel(), yc.ravel(), zz.ravel()], axis=1)
+            pts_world = (R @ pts_local.T).T + p0
+            Xc = pts_world[:,0].reshape(shape)
+            Yc = pts_world[:,1].reshape(shape)
+            Zc = pts_world[:,2].reshape(shape)
+            surf = ax.plot_surface(Xc, Yc, Zc, color="#00aaff", alpha=0.15, linewidth=0, antialiased=False)
+            link_patches.append(surf)
+
+            # end caps (hemispheres)
+            for cap_center, cap_sign in [(p0, -1), (p1, 1)]:
+                phi = np.linspace(0, np.pi/2, 6)
+                th = np.linspace(0, 2*np.pi, 16)
+                pp, tt = np.meshgrid(phi, th)
+                xs = r * np.sin(pp) * np.cos(tt)
+                ys = r * np.sin(pp) * np.sin(tt)
+                zs = cap_sign * r * np.cos(pp)
+                shape2 = xs.shape
+                pts_local2 = np.stack([xs.ravel(), ys.ravel(), zs.ravel()], axis=1)
+                pts_world2 = (R @ pts_local2.T).T + cap_center
+                Xs = pts_world2[:,0].reshape(shape2)
+                Ys = pts_world2[:,1].reshape(shape2)
+                Zs = pts_world2[:,2].reshape(shape2)
+                surf2 = ax.plot_surface(Xs, Ys, Zs, color="#00aaff", alpha=0.15, linewidth=0, antialiased=False)
+                link_patches.append(surf2)
+
     def redraw(joints_rad):
         pts = get_joint_positions(joints_rad)
         xs = [p[0] for p in pts]
@@ -469,22 +240,29 @@ def run_visualizer():
         degs = [round(np.rad2deg(j), 1) for j in joints_rad]
         title.set_text(f"EE: ({ee.x:.3f}, {ee.y:.3f}, {ee.z:.3f}) m\nJoints (deg): {degs}")
         draw_boxes()
+        draw_link_boxes(pts)
         fig.canvas.draw_idle()
         fig.canvas.flush_events()
 
     redraw(curr)
 
+    target = curr[:]
+
     while plt.fignum_exists(fig.number):
         try:
             item = plot_queue.get_nowait()
             if isinstance(item, dict) and "obstacles" in item:
+                draw_boxes()
+                fig.canvas.draw_idle()
                 redraw(curr)
             else:
-                curr = item
-                redraw(curr)
+                curr = target[:]
+                target = item
         except queue.Empty:
             pass
-        plt.pause(0.01)
+        curr = [c + 0.25 * (t - c) for c, t in zip(curr, target)]
+        redraw(curr)
+        plt.pause(0.005)
 
 
 if __name__ == "__main__":

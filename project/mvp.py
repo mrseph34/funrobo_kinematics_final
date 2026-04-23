@@ -1,4 +1,6 @@
+from project.object_detection import ArucoCameraTracker
 
+tracker = ArucoCameraTracker(video_id=0)
 block_found = 0
 scan_pts = [[],[]] #i just put 2 in here as placeholder FILL IN
 home = [] #xyz FILL IN
@@ -10,7 +12,8 @@ move_to() #home
 set_joints() #open gripper
 for i,pt in enumerate(scan_pts):
     move_to() #pt
-    block_pos = cv_pipeline() #this will return the block location, and return none if theres no block
+    ids, rvecs, tvecs, image = tracker.run()
+    #get pos
     if block_pos is not None:
         block_found = 1
 

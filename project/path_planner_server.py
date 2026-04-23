@@ -55,33 +55,68 @@ def _boxes_from_gui(boxes_mm):
 
 
 import pinocchio as pin
+import coal
 import pyroboplan.models.hiwonder as hiwonder
+from pyroboplan.core.utils import set_collisions
 
-_pin_model, _pin_collision_model, _ = hiwonder.load_models()
+_pin_model, _pin_collision_model, _pin_visual_model = hiwonder.load_models()
 _pin_data = _pin_model.createData()
+
+# Add self-collision pairs for non-adjacent links
+_link_names = [o.name for o in _pin_collision_model.geometryObjects if "link" in o.name]
+for i in range(len(_link_names)):
+    for j in range(i + 2, len(_link_names)):
+        set_collisions(_pin_model, _pin_collision_model, _link_names[i], _link_names[j], True)
+
 _pin_collision_data = _pin_collision_model.createData()
+print(f"[PIN] hiwonder model nq={_pin_model.nq}  nv={_pin_model.nv}  njoints={_pin_model.njoints}")
+
+_pin_obstacle_names = []
+
+
+def _rebuild_pin_obstacles():
+    """Sync _obstacles list into pinocchio collision model as box geometry objects."""
+    global _pin_collision_data
+    for name in _pin_obstacle_names:
+        idx = _pin_collision_model.getGeometryId(name)
+        if idx < _pin_collision_model.ngeoms:
+            _pin_collision_model.removeGeometryObject(name)
+    _pin_obstacle_names.clear()
+
+    for i, (x1, y1, z1, x2, y2, z2) in enumerate(_obstacles):
+        cx, cy, cz = (x1+x2)/2, (y1+y2)/2, (z1+z2)/2
+        sx, sy, sz = abs(x2-x1), abs(y2-y1), abs(z2-z1)
+        name = f"gui_obstacle_{i}"
+        obj = pin.GeometryObject(
+            name, 0,
+            pin.SE3(np.eye(3), np.array([cx, cy, cz])),
+            coal.Box(sx, sy, sz),
+        )
+        obj.meshColor = np.array([1.0, 0.5, 0.0, 0.5])
+        _pin_collision_model.addGeometryObject(obj)
+        _pin_obstacle_names.append(name)
+        for link_name in _link_names:
+            set_collisions(_pin_model, _pin_collision_model, name, link_name, True)
+
+    _pin_collision_data = _pin_collision_model.createData()
 
 
 def _collides(joints_rad):
-    """Return True if pinocchio detects any collision (obstacles + self) for this config."""
+    """Return True if pinocchio detects any collision (self + GUI obstacles) for this config."""
     q = np.array(joints_rad, dtype=float)
     pin.computeCollisions(_pin_model, _pin_data, _pin_collision_model, _pin_collision_data, q, False)
     for res in _pin_collision_data.collisionResults:
         if res.isCollision():
             return True
-    if not _obstacles:
-        return False
-    pts = get_joint_positions(joints_rad)
-    for p in pts:
-        for (x1,y1,z1,x2,y2,z2) in _obstacles:
-            if x1 <= p[0] <= x2 and y1 <= p[1] <= y2 and z1 <= p[2] <= z2:
-                return True
     return False
 
 
 def _rrt_plan(q_start, q_goal, fight=True, max_iter=2000, step=0.15):
     """Simple RRT in joint space. Returns waypoint list or None if blocked and fight=False."""
-    if not _obstacles and not _collides(q_goal):
+    if _collides(q_goal):
+        print(f"[RRT] Goal config is in collision — move aborted")
+        return [q_start, q_goal] if fight else None
+    if not _obstacles and not _pin_obstacle_names:
         return [q_start, q_goal]
     lims_lo = np.array([lim[0] for lim in model.joint_limits])
     lims_hi = np.array([lim[1] for lim in model.joint_limits])
@@ -323,6 +358,7 @@ def handle(conn):
                 elif msg["cmd"] == "set_obstacles":
                     _obstacles.clear()
                     _obstacles.extend(_boxes_from_gui(msg.get("boxes", [])))
+                    _rebuild_pin_obstacles()
                     plot_queue.put({"obstacles": list(_obstacles)})
                     conn.sendall(b'{"status":"done"}\n')
 

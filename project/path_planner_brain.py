@@ -18,11 +18,10 @@ from five_dof import FiveDOFRobot
 HOST = "localhost"
 PORT = 9999
 SIM_HOST = "localhost"
-SIM_PORT = 9997
-PI_HOST = "192.168.16.154"
-PI_PORT = 9998
+SIM_PORT = 9697
 CONTROL_HZ = 20
 DT = 1.0 / CONTROL_HZ
+CAM_OFFSET_M = (0.0, 0.0635, -0.127)
 JOINT_DELTA_CLAMP_DEG = 15.0
 CLAMP_ENABLED = False
 
@@ -36,42 +35,39 @@ curr_joints = None
 running = False
 _move_gen = 0
 _obstacles = []
+_raw_obstacles = []
 
-_pi_sock = None
+_gripper_angle = 0.0
 _sim_sock = None
-_pi_lock = threading.Lock()
+_gui_conn = None
 _sim_lock = threading.Lock()
+_gui_lock = threading.Lock()
 
-
-def _connect_pi():
-    global _pi_sock
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(2)
-        s.connect((PI_HOST, PI_PORT))
-        s.settimeout(None)
-        _pi_sock = s
-        print(f"[MOTION] Connected to Pi at {PI_HOST}:{PI_PORT}")
-    except Exception as e:
-        _pi_sock = None
-        print(f"[MOTION] Pi not reachable ({e}), no robot output")
 
 
 def _connect_sim():
     global _sim_sock
+    if _sim_sock is not None:
+        return
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(2)
+        s.settimeout(0.3)
         s.connect((SIM_HOST, SIM_PORT))
         s.settimeout(None)
         _sim_sock = s
         print(f"[MOTION] Connected to sim at {SIM_HOST}:{SIM_PORT}")
-    except Exception as e:
+        if _raw_obstacles:
+            boxes_copy = list(_raw_obstacles)
+            def _delayed_obs():
+                time.sleep(1.0)
+                _send(_sim_sock, _sim_lock, {"cmd": "set_obstacles", "boxes": boxes_copy})
+            threading.Thread(target=_delayed_obs, daemon=True).start()
+    except Exception:
         _sim_sock = None
-        print(f"[MOTION] Sim not reachable ({e}), no sim output")
 
 
 def _send(sock, lock, msg_dict):
+    global _sim_sock
     if sock is None:
         return
     data = (json.dumps(msg_dict) + "\n").encode()
@@ -79,13 +75,17 @@ def _send(sock, lock, msg_dict):
         try:
             sock.sendall(data)
         except Exception:
-            pass
+            if sock is _sim_sock:
+                _sim_sock = None
 
 
 def push_joints(joints_rad):
-    deg = [np.rad2deg(j) for j in joints_rad]
+    global _sim_sock
+    if _sim_sock is None:
+        _connect_sim()
+    deg = [round(np.rad2deg(j), 4) for j in joints_rad]
     _send(_sim_sock, _sim_lock, {"cmd": "set_joints", "joints": deg})
-    _send(_pi_sock, _pi_lock, {"cmd": "set_joints", "joints": deg})
+    _send(_gui_conn, _gui_lock, {"status": "joints", "joints": deg})
 
 
 def _boxes_from_gui(boxes_mm):
@@ -306,7 +306,7 @@ def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method, phi_d=None, gen=0, 
         steps_for_clamp = max(2, int(np.ceil(max_joint_delta_deg / JOINT_DELTA_CLAMP_DEG * 2.0)))
         seg_steps = max(steps_for_clamp, int(seg_T / DT))
         step_dt = seg_T / seg_steps
-        print(f"[MOTION]   seg {wi}: seg_T={seg_T:.3f}s steps={seg_steps} step_dt={step_dt*1000:.1f}ms")
+        # print(f"[MOTION]   seg {wi}: seg_T={seg_T:.3f}s steps={seg_steps} step_dt={step_dt*1000:.1f}ms")
         if _move_gen != gen:
             break
         if traj_method.lower() == "quintic":
@@ -325,7 +325,7 @@ def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method, phi_d=None, gen=0, 
             if CLAMP_ENABLED:
                 delta = max(abs(np.rad2deg(q_next[j] - curr_joints[j])) for j in range(len(curr_joints)))
                 if delta > JOINT_DELTA_CLAMP_DEG:
-                    print(f"[MOTION]   step {k} clamped: delta={delta:.2f}deg")
+                    # print(f"[MOTION]   step {k} clamped: delta={delta:.2f}deg")
                     continue
             curr_joints = q_next
             push_joints(curr_joints)
@@ -371,7 +371,7 @@ def move_to_traj_joints(q_target, speed, traj_method, gen=0, fight=False):
         steps_for_clamp = max(2, int(np.ceil(max_joint_delta_deg / JOINT_DELTA_CLAMP_DEG * 2.0)))
         seg_steps = max(steps_for_clamp, int(seg_T / DT))
         step_dt = seg_T / seg_steps
-        print(f"[MOTION]   seg {wi}: seg_T={seg_T:.3f}s steps={seg_steps} step_dt={step_dt*1000:.1f}ms")
+        # print(f"[MOTION]   seg {wi}: seg_T={seg_T:.3f}s steps={seg_steps} step_dt={step_dt*1000:.1f}ms")
         if _move_gen != gen:
             break
         if traj_method == "Quintic":
@@ -390,7 +390,7 @@ def move_to_traj_joints(q_target, speed, traj_method, gen=0, fight=False):
             if CLAMP_ENABLED:
                 delta = max(abs(np.rad2deg(q_next[j] - curr_joints[j])) for j in range(len(curr_joints)))
                 if delta > JOINT_DELTA_CLAMP_DEG:
-                    print(f"[MOTION]   step {k} clamped: delta={delta:.2f}deg")
+                    # print(f"[MOTION]   step {k} clamped: delta={delta:.2f}deg")
                     continue
             curr_joints = q_next
             push_joints(curr_joints)
@@ -399,7 +399,8 @@ def move_to_traj_joints(q_target, speed, traj_method, gen=0, fight=False):
 
 
 def handle(conn):
-    global curr_joints, running
+    global curr_joints, running, _gui_conn
+    _gui_conn = conn
 
     running = True
     curr_joints = HOME_JOINTS_RAD[:]
@@ -484,8 +485,24 @@ def handle(conn):
                             conn.sendall(b'{"status":"done"}\n')
                     threading.Thread(target=_do_joints, daemon=True).start()
 
+                elif msg["cmd"] == "detect":
+                    def _do_detect(snap=curr_joints[:]):
+                        try:
+                            conn.sendall((json.dumps({"cmd": "detect_result", "error": "Pi not connected"}) + "\n").encode())
+                        except Exception as e:
+                            conn.sendall((json.dumps({"cmd": "detect_result", "error": str(e)}) + "\n").encode())
+                    threading.Thread(target=_do_detect, daemon=True).start()
+
                 elif msg["cmd"] == "gripper":
-                    _send(_pi_sock, _pi_lock, msg)
+                    global _gripper_angle
+                    action = msg.get("action")
+                    width = msg.get("width", None)
+                    if action == "open":
+                        _gripper_angle = -100.0
+                    elif action == "close":
+                        _gripper_angle = -10.0
+                    elif width is not None:
+                        _gripper_angle = float(width)
                     conn.sendall(b'{"status":"done"}\n')
 
                 elif msg["cmd"] == "simulate":
@@ -495,6 +512,9 @@ def handle(conn):
                     raw = msg.get("boxes", [])
                     _obstacles.clear()
                     _obstacles.extend(_boxes_from_gui(raw))
+                    _raw_obstacles.clear()
+                    _raw_obstacles.extend(raw)
+                    _connect_sim()
                     _send(_sim_sock, _sim_lock, msg)
                     conn.sendall(b'{"status":"done"}\n')
 
@@ -502,13 +522,13 @@ def handle(conn):
         print(f"[MOTION ERROR] {e}")
     finally:
         running = False
+        _gui_conn = None
         conn.close()
 
 
 def main():
     global model
     model = FiveDOFRobot()
-    _connect_pi()
     _connect_sim()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

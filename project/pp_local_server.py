@@ -26,7 +26,7 @@ import funrobo_kinematics.core.utils as ut
 from five_dof import FiveDOFRobot
 
 HOST = "localhost"
-PORT = 9997
+PORT = 9697
 CONTROL_HZ = 20
 DT = 1.0 / CONTROL_HZ
 

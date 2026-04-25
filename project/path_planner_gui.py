@@ -8,8 +8,10 @@ import sys
 import time
 import os
 
+DETECT_OFFSET_MM = (0.0, 0, 0) 
+
 PI_HOST = "192.168.16.154"
-PI_PORT = 9999
+PI_PORT = 9698
 MOVE_SPEED_MMS = 30
 
 # Pre-defined obstacle boxes: (x1_mm, y1_mm, z1_mm, x2_mm, y2_mm, z2_mm)
@@ -46,9 +48,11 @@ class ArmControlGUI:
         self._sim_sock = None
         self._sim_buf = ""
 
+        self._brain_proc = None
         self._obstacles = list(INIT_BOXES)
 
         self._build_ui()
+        self._launch_brain()
 
     def _build_ui(self):
         BG = "#0f1117"
@@ -100,7 +104,7 @@ class ArmControlGUI:
                    command=self._connect).pack(side="left", padx=(0, 4))
         ttk.Button(btn_row, text="Disconnect", style="Dim.TButton",
                    command=self._disconnect).pack(side="left")
-        ttk.Button(btn_row, text="Refresh Motion", style="Dim.TButton",
+        ttk.Button(btn_row, text="Refresh Brain", style="Dim.TButton",
                    command=self._refresh_motion, width=14).pack(side="right")
 
         self.conn_badge = tk.Label(panel, text="● disconnected", bg=PANEL, fg="#ff4466",
@@ -124,15 +128,19 @@ class ArmControlGUI:
         xyz_row = self.xyz_row
         xyz_row.pack(fill="x", pady=4)
         self.xyz_entries = {}
-        for label, default in [("X (mm)", "0"), ("Y (mm)", "233"), ("Z (mm)", "174")]:
+        for label, default in [("X (mm)", "0"), ("Y (mm)", "174"), ("Z (mm)", "233")]:
             col = ttk.Frame(xyz_row, style="Dark.TFrame")
-            col.pack(side="left", padx=8)
+            col.pack(side="left", padx=4)
             ttk.Label(col, text=label, style="Dark.TLabel").pack()
-            entry = tk.Entry(col, width=8, bg="#2a2d3d", fg=TXT,
+            entry = tk.Entry(col, width=6, bg="#2a2d3d", fg=TXT,
                              insertbackground=ACC, font=("Courier", 12), bd=0, justify="center")
             entry.insert(0, default)
             entry.pack()
             self.xyz_entries[label[0]] = entry
+
+        self._detect_btn = ttk.Button(xyz_row, text="Detect", style="Dim.TButton",
+                                      command=self._detect)
+        self._detect_btn.pack(side="right", padx=8)
 
         self.joint_row = ttk.Frame(panel, style="Dark.TFrame")
         joint_row = self.joint_row
@@ -288,7 +296,8 @@ class ArmControlGUI:
         return "({:.0f},{:.0f},{:.0f}) → ({:.0f},{:.0f},{:.0f})".format(*box)
 
     def _send_obstacles(self):
-        self._send({"cmd": "set_obstacles", "boxes": list(self._obstacles)})
+        msg = {"cmd": "set_obstacles", "boxes": list(self._obstacles)}
+        self._send(msg)
 
     def _obs_add(self):
         try:
@@ -348,15 +357,13 @@ class ArmControlGUI:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             examples_dir = os.path.join(os.path.dirname(script_dir), "examples")
             env = os.environ.copy()
-            env["PYTHONPATH"] = script_dir + os.pathsep + examples_dir + os.pathsep + env.get("PYTHONPATH", "")
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (existing + os.pathsep if existing else "") + script_dir + os.pathsep + examples_dir
             self._sim_viz_proc = subprocess.Popen(
                 [sys.executable, os.path.join(script_dir, "pp_local_server.py")],
                 cwd=script_dir, env=env,
             )
-            self._sim_proc = subprocess.Popen(
-                [sys.executable, os.path.join(script_dir, "path_planner_motion.py")],
-                cwd=script_dir, env=env,
-            )
+            self._sim_proc = self._sim_viz_proc  # just tracks viz for poll
         except Exception as e:
             self.status.set(f"Sim launch failed: {e}")
             self._sim_enabled.set(False)
@@ -367,12 +374,18 @@ class ArmControlGUI:
                 time.sleep(0.3)
                 try:
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.connect(("localhost", PI_PORT))
+                    s.connect(("localhost", 9999))
                     s.settimeout(0.1)
                     self._sim_sock = s
                     self.root.after(0, lambda: self.status.set("Simulator running."))
                     threading.Thread(target=self._listen_sim, daemon=True).start()
-                    self.root.after(0, self._send_obstacles)
+                    def _send_one_by_one():
+                        time.sleep(1.0)
+                        for i in range(len(self._obstacles)):
+                            msg = {"cmd": "set_obstacles", "boxes": list(self._obstacles[:i+1])}
+                            self._send(msg)
+                            time.sleep(0.1)
+                    threading.Thread(target=_send_one_by_one, daemon=True).start()
                     self.root.after(500, self._poll_sim)
                     return
                 except Exception:
@@ -393,8 +406,39 @@ class ArmControlGUI:
             return
         self.root.after(500, self._poll_sim)
 
+    def _launch_brain(self):
+        if self._brain_proc is not None and self._brain_proc.poll() is None:
+            self._brain_proc.kill()
+            self._brain_proc = None
+        try:
+            import signal
+            result = subprocess.run(["lsof", "-ti", "tcp:9999"], capture_output=True, text=True)
+            for pid in result.stdout.strip().split():
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        examples_dir = os.path.join(os.path.dirname(script_dir), "examples")
+        env = os.environ.copy()
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (existing + os.pathsep if existing else "") + script_dir + os.pathsep + examples_dir
+        try:
+            self._brain_proc = subprocess.Popen(
+                [sys.executable, os.path.join(script_dir, "path_planner_brain.py")],
+                cwd=script_dir, env=env,
+            )
+            print(f"[GUI] Brain launched (pid {self._brain_proc.pid})")
+        except Exception as e:
+            print(f"[GUI] Brain launch failed: {e}")
+
     def _on_close(self):
         self._stop_sim()
+        if self._brain_proc:
+            self._brain_proc.kill()
+            self._brain_proc = None
         if self.sock:
             try:
                 self.sock.close()
@@ -409,12 +453,10 @@ class ArmControlGUI:
             except Exception:
                 pass
             self._sim_sock = None
-        if self._sim_proc:
-            self._sim_proc.kill()
-            self._sim_proc = None
         if self._sim_viz_proc:
             self._sim_viz_proc.kill()
             self._sim_viz_proc = None
+        self._sim_proc = None
 
     def _listen_sim(self):
         while self._sim_sock:
@@ -425,7 +467,14 @@ class ArmControlGUI:
                     while "\n" in self._sim_buf:
                         line, self._sim_buf = self._sim_buf.split("\n", 1)
                         msg = json.loads(line)
-                        if msg.get("status") == "sim":
+                        if msg.get("status") == "joints":
+                            if self.sock:
+                                try:
+                                    # print(f"[GUI] brain -> pi: set_joints {msg['joints']}")
+                                    self.sock.sendall((json.dumps({"cmd": "set_joints", "joints": msg["joints"]}) + "\n").encode())
+                                except Exception as e:
+                                    pass  # print(f"[GUI] pi forward error: {e}")
+                        elif msg.get("status") == "sim":
                             self._print_sim(msg)
                 else:
                     break
@@ -453,7 +502,7 @@ class ArmControlGUI:
                 time.sleep(0.3)
                 try:
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.connect(("localhost", PI_PORT))
+                    s.connect(("localhost", 9999))
                     s.settimeout(0.1)
                     self._sim_sock = s
                     self.root.after(0, lambda: self.status.set("Motion server reconnected."))
@@ -471,17 +520,33 @@ class ArmControlGUI:
         self.conn_badge.config(text="● connecting…", fg="#ffaa00")
         def _do_connect():
             try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(2.5)
-                s.connect((self.pi_host.get(), PI_PORT))
-                s.settimeout(0.1)
-                self.sock = s
+                pi = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                pi.settimeout(2.5)
+                pi.connect((self.pi_host.get(), PI_PORT))
+                pi.settimeout(0.1)
+                self.sock = pi
+                threading.Thread(target=self._listen, daemon=True).start()
+                br = None
+                for _ in range(10):
+                    try:
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s.settimeout(1.0)
+                        s.connect(("localhost", 9999))
+                        s.settimeout(0.1)
+                        br = s
+                        break
+                    except Exception:
+                        time.sleep(0.3)
+                if br is None:
+                    raise Exception("Brain not reachable on localhost:9999")
+                self._sim_sock = br
                 self.root.after(0, lambda: self.conn_badge.config(text="● connected", fg="#00ff88"))
                 self.root.after(0, lambda: self.status.set(f"Connected to {self.pi_host.get()}"))
-                threading.Thread(target=self._listen, daemon=True).start()
+                threading.Thread(target=self._listen_sim, daemon=True).start()
                 self.root.after(0, self._send_obstacles)
             except Exception as e:
                 self.sock = None
+                self._sim_sock = None
                 err = str(e)
                 self.root.after(0, lambda: self.conn_badge.config(text="● disconnected", fg="#ff4466"))
                 self.root.after(0, lambda: self.status.set(f"Connection failed: {err}"))
@@ -495,22 +560,14 @@ class ArmControlGUI:
         self.status.set("Disconnected.")
 
     def _refresh_motion(self):
+        if self._brain_proc is not None:
+            self._brain_proc.kill()
+            self._brain_proc = None
         if self._sim_proc is not None:
             self._sim_proc.kill()
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        examples_dir = os.path.join(os.path.dirname(script_dir), "examples")
-        python = sys.executable
-        env = os.environ.copy()
-        env["PYTHONPATH"] = script_dir + os.pathsep + examples_dir + os.pathsep + env.get("PYTHONPATH", "")
-        try:
-            self._sim_proc = subprocess.Popen(
-                [python, os.path.join(script_dir, "path_planner_motion.py")],
-                cwd=script_dir, env=env,
-            )
-            self.status.set("Motion server reloaded.")
-            self._reconnect_sim()
-        except Exception as e:
-            self.status.set(f"Refresh failed: {e}")
+        self._launch_brain()
+        self.status.set("Motion server reloaded.")
+        self._reconnect_sim()
 
     def _listen(self):
         while self.sock:
@@ -522,20 +579,35 @@ class ArmControlGUI:
                         line, self.buf = self.buf.split("\n", 1)
                         msg = json.loads(line)
                         if msg.get("status") == "done":
-                            print(f"[GUI] recv: done")
+                            # print(f"[GUI] recv: done")
                             self.status.set("Move complete.")
                         elif msg.get("status") == "homed":
-                            print(f"[GUI] recv: homed")
+                            # print(f"[GUI] recv: homed")
                             self.status.set("Homed.")
                         elif msg.get("status") == "sim":
                             self._print_sim(msg)
                         elif msg.get("status") == "error":
                             self.status.set(f"Error: {msg.get('msg', '')}")
+                        elif msg.get("cmd") == "detect_result":
+                            print(f"[GUI RECV detect_result] {msg}")
+                            if "error" in msg:
+                                self.root.after(0, lambda m=msg: self.status.set(f"Detect: {m['error']}"))
+                            else:
+                                x = msg["x_mm"] + DETECT_OFFSET_MM[0]
+                                y = msg["y_mm"] + DETECT_OFFSET_MM[1]
+                                z = msg["z_mm"] + DETECT_OFFSET_MM[2]
+                                def _update(x=x, y=y, z=z):
+                                    self.xyz_entries["X"].delete(0, "end"); self.xyz_entries["X"].insert(0, f"{x:.1f}")
+                                    self.xyz_entries["Y"].delete(0, "end"); self.xyz_entries["Y"].insert(0, f"{y:.1f}")
+                                    self.xyz_entries["Z"].delete(0, "end"); self.xyz_entries["Z"].insert(0, f"{z:.1f}")
+                                    self.status.set(f"Detected: ({x:.1f}, {y:.1f}, {z:.1f}) mm")
+                                self.root.after(0, _update)
                 else:
                     break
             except socket.timeout:
                 continue
-            except Exception:
+            except Exception as e:
+                print(f"[GUI _listen ERROR] {e}")
                 break
         if self.sock:
             try:
@@ -568,12 +640,12 @@ class ArmControlGUI:
             messagebox.showerror("Not connected", "Connect to the Pi or enable Simulate first.")
             return False
         target = "sim" if self._sim_sock else f"pi({self.pi_host.get()})"
-        print(f"[GUI] send -> {target}: {msg}")
+        # print(f"[GUI] send -> {target}: {msg}")
         data = (json.dumps(msg) + "\n").encode()
         try:
             active.sendall(data)
         except Exception as e:
-            print(f"[GUI] send error: {e}")
+            pass  # print(f"[GUI] send error: {e}")
         return True
 
     def _send_atomic(self, stop_msg, move_msg):
@@ -582,14 +654,13 @@ class ArmControlGUI:
             messagebox.showerror("Not connected", "Connect to the Pi or enable Simulate first.")
             return False
         target = "sim" if self._sim_sock else f"pi({self.pi_host.get()})"
-        print(f"[GUI] send -> {target}: {stop_msg}")
-        print(f"[GUI] send -> {target}: {move_msg}")
+        # print(f"[GUI] send -> {target}: {stop_msg}")
+        # print(f"[GUI] send -> {target}: {move_msg}")
         data = (json.dumps(stop_msg) + "\n" + json.dumps(move_msg) + "\n").encode()
         try:
             active.sendall(data)
         except Exception as e:
-            print(f"[GUI] send error: {e}")
-            return False
+            pass  # print(f"[GUI] send error: {e}")
         return True
 
     def _get_xyz(self):
@@ -600,6 +671,16 @@ class ArmControlGUI:
         except ValueError:
             messagebox.showerror("Invalid input", "X, Y, and Z must be numbers.")
             return None
+
+    def _detect(self):
+        if not self.sock:
+            self.status.set("Not connected to Pi.")
+            return
+        self.status.set("Detecting...")
+        try:
+            self.sock.sendall((json.dumps({"cmd": "detect"}) + "\n").encode())
+        except Exception as e:
+            self.status.set(f"Detect error: {e}")
 
     def _move_dropoff(self):
         print(f"[GUI] _move_dropoff clicked speed={self.speed_mms.get()}mm/s")
@@ -646,12 +727,24 @@ class ArmControlGUI:
             }):
                 self.status.set(f"Moving to joints {joints}...")
 
+    def _send_gripper(self, msg):
+        if not self.sock:
+            messagebox.showerror("Not connected", "Connect to the Pi first.")
+            return False
+        try:
+            self.sock.sendall((json.dumps(msg) + "\n").encode())
+            print(f"[GUI GRIPPER] sent: {msg}")
+        except Exception as e:
+            print(f"[GUI GRIPPER] send error: {e}")
+            return False
+        return True
+
     def _open_gripper(self):
-        if self._send({"cmd": "gripper", "action": "open", "width": -100}):
+        if self._send_gripper({"cmd": "gripper", "action": "open", "width": -100}):
             self.status.set("Opening gripper...")
 
     def _close_gripper(self):
-        if self._send({"cmd": "gripper", "action": "close", "width": -10}):
+        if self._send_gripper({"cmd": "gripper", "action": "close", "width": -10}):
             self.status.set("Closing gripper...")
 
     def _set_gripper(self):
@@ -660,7 +753,7 @@ class ArmControlGUI:
         except ValueError:
             messagebox.showerror("Invalid input", "Gripper value must be a number.")
             return
-        if self._send({"cmd": "gripper", "action": "set", "width": w}):
+        if self._send_gripper({"cmd": "gripper", "action": "set", "width": w}):
             self.status.set(f"Gripper set to {abs(w)}...")
 
     def _home(self):

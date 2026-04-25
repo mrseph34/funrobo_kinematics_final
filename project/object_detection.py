@@ -56,11 +56,12 @@ class ArucoCameraTracker:
         if not self.cap.isOpened():
             raise RuntimeError("Camera failed to open")
 
-    def capture_frame_after_delay(self, delay_sec=0.5):
+    def capture_frame_after_delay(self, delay_sec=0.5, verbose=True):
         """
         Waits for delay_sec seconds, captures a frame, and saves it
         """
-        print(f"Waiting {delay_sec} seconds before capturing frame...")
+        if verbose:
+            print(f"Waiting {delay_sec} seconds before capturing frame...")
         time.sleep(delay_sec)
 
         ret, self.frame = self.cap.read()
@@ -68,14 +69,15 @@ class ArucoCameraTracker:
             raise RuntimeError("Failed to capture frame")
 
         cv2.imwrite(self.save_path, self.frame)
-        print(f"Frame saved to {self.save_path}")
+        if verbose:
+            print(f"Frame saved to {self.save_path}")
 
         return self.frame
 
     def undistort_image(self, img):
         return cv2.undistort(img, self.K, self.distortion)
 
-    def detect_and_estimate_pose(self, img):
+    def detect_and_estimate_pose(self, img, verbose=True):
         """
         Detects ArUco markers and estimates pose
         Returns: ids, rvecs, tvecs
@@ -84,31 +86,39 @@ class ArucoCameraTracker:
         corners, ids, _ = self.detector.detectMarkers(gray)
 
         if ids is None:
-            print("No markers detected")
+            if verbose:
+                print("No markers detected")
             return None, None, None
 
-        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-            corners,
-            self.marker_length,
-            self.K,
-            self.distortion
-        )
+        rvecs, tvecs = [], []
+        for corner in corners:
+            obj_points = np.array([
+                [-self.marker_length / 2,  self.marker_length / 2, 0],
+                [ self.marker_length / 2,  self.marker_length / 2, 0],
+                [ self.marker_length / 2, -self.marker_length / 2, 0],
+                [-self.marker_length / 2, -self.marker_length / 2, 0]
+            ], dtype=np.float32)
+            _, rvec, tvec = cv2.solvePnP(obj_points, corner[0], self.K, self.distortion)
+            rvecs.append(rvec)
+            tvecs.append(tvec)
+        rvecs = np.array(rvecs)
+        tvecs = np.array(tvecs)
 
         return ids, rvecs, tvecs
 
-    def run(self):
+    def run(self, verbose=True):
         """
         Full pipeline:
         open camera → wait → capture → undistort → detect → estimate pose
         """
         self.open_camera()
 
-        frame = self.capture_frame_after_delay(0.5)
+        frame = self.capture_frame_after_delay(0.025, verbose=verbose)
         undistorted = self.undistort_image(frame)
 
-        ids, rvecs, tvecs = self.detect_and_estimate_pose(undistorted)
+        ids, rvecs, tvecs = self.detect_and_estimate_pose(undistorted, verbose=verbose)
 
-        if ids is not None:
+        if ids is not None and verbose:
             print("Detected markers:", ids.flatten())
             print("Rotation vectors:\n", rvecs)
             print("Translation vectors:\n", tvecs)

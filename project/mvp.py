@@ -1,5 +1,15 @@
 import time
 
+def _wait_move(gui, timeout=10):
+    gui._mvp_move_result = None
+    for _ in range(timeout * 10):
+        time.sleep(0.1)
+        if gui._mvp_move_result is not None:
+            break
+    result = gui._mvp_move_result
+    gui._mvp_move_result = None
+    return result
+
 block_found = 0
 scan_pts = [[0, 0, 90, -60, 0], [-50, 0, 90, -60, 0], [50, 0, 90, -60, 0]] #scan joint positions
 home = [0, 0, 90, -30, 0] #home joints
@@ -39,7 +49,11 @@ def run(gui):
 
     if block_found:
         gui._send_atomic({"cmd": "stop"}, {"cmd": "move_xyz", "x_mm": block_pos[0], "y_mm": block_pos[1], "z_mm": block_pos[2], "speed_mms": speed, "use_aik": True, "phi_d": None, "traj_method": "Cubic", "fight_obstacles": False}) #block_pos
-        time.sleep(4)
+        move_ok = _wait_move(gui, timeout=10)
+        if move_ok == "ik_failed":
+            block_found = 0
+
+    if block_found:
         gui._send_gripper({"cmd": "gripper", "action": "close", "width": -10})
         time.sleep(1)
         gui._send_atomic({"cmd": "stop"}, {"cmd": "move_xyz", "x_mm": dropoff[0], "y_mm": dropoff[1], "z_mm": dropoff[2], "speed_mms": speed, "use_aik": True, "phi_d": None, "traj_method": "Cubic", "fight_obstacles": False}) #dropoff

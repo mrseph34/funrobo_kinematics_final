@@ -8,11 +8,11 @@ import sys
 import time
 import os
 
-DETECT_OFFSET_MM = (0.0, 0, 0) 
+DETECT_OFFSET_MM = (0, 0, 0) 
 
 PI_HOST = "192.168.16.154"
 PI_PORT = 9698
-MOVE_SPEED_MMS = 30
+MOVE_SPEED_MMS = 100
 
 # Pre-defined obstacle boxes: (x1_mm, y1_mm, z1_mm, x2_mm, y2_mm, z2_mm)
 # Two corners in mm matching the GUI XYZ coordinate space.
@@ -52,6 +52,7 @@ class ArmControlGUI:
         self._obstacles = list(INIT_BOXES)
         self._mvp_detect_result = None
         self._mvp_waiting_detect = False
+        self._mvp_move_result = None
 
         self._build_ui()
         self._launch_brain()
@@ -478,6 +479,11 @@ class ArmControlGUI:
                                     self.sock.sendall((json.dumps({"cmd": "set_joints", "joints": msg["joints"]}) + "\n").encode())
                                 except Exception as e:
                                     pass  # print(f"[GUI] pi forward error: {e}")
+                        elif msg.get("status") == "done":
+                            self._mvp_move_result = "done"
+                        elif msg.get("status") == "ik_failed":
+                            self.root.after(0, lambda: self.status.set("IK failed."))
+                            self._mvp_move_result = "ik_failed"
                         elif msg.get("status") == "sim":
                             self._print_sim(msg)
                 else:
@@ -585,6 +591,9 @@ class ArmControlGUI:
                         if msg.get("status") == "done":
                             # print(f"[GUI] recv: done")
                             self.status.set("Move complete.")
+                        elif msg.get("status") == "ik_failed":
+                            self.root.after(0, lambda: self.status.set("IK failed."))
+                            self._mvp_move_result = "ik_failed"
                         elif msg.get("status") == "homed":
                             # print(f"[GUI] recv: homed")
                             self.status.set("Homed.")
@@ -594,8 +603,7 @@ class ArmControlGUI:
                             self.status.set(f"Error: {msg.get('msg', '')}")
                         elif msg.get("cmd") == "detect_result":
                             print(f"[GUI RECV detect_result] {msg}")
-                            if self._mvp_waiting_detect:
-                                self._mvp_detect_result = msg
+                            self._mvp_detect_result = msg
                             if "error" in msg:
                                 self.root.after(0, lambda m=msg: self.status.set(f"Detect: {m['error']}"))
                             else:

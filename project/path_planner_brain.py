@@ -273,7 +273,7 @@ def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method, phi_d=None, gen=0, 
     qf_list = solve_ik(make_ee(x_m, y_m, z_m), use_aik, phi_d=phi_d)
     if qf_list is None or len(qf_list) == 0:
         print(f"[MOTION] IK failed for ({x_m:.4f}, {y_m:.4f}, {z_m:.4f})")
-        return
+        return False
 
     if _move_gen != gen:
         return
@@ -458,11 +458,14 @@ def handle(conn):
                     def _do_xyz(x_m=x_m, y_m=y_m, z_m=z_m, speed=speed, use_aik=use_aik, traj_method=traj_method, phi_d=phi_d, my_gen=my_gen, fight=fight, snap=snap):
                         global curr_joints
                         curr_joints = snap
-                        move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method, phi_d=phi_d, gen=my_gen, fight=fight)
+                        ok = move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method, phi_d=phi_d, gen=my_gen, fight=fight)
                         if _move_gen == my_gen:
-                            final_ee, _ = model.calc_forward_kinematics(curr_joints)
-                            print(f"[MOTION] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
-                            conn.sendall(b'{"status":"done"}\n')
+                            if ok is False:
+                                conn.sendall(b'{"status":"ik_failed"}\n')
+                            else:
+                                final_ee, _ = model.calc_forward_kinematics(curr_joints)
+                                print(f"[MOTION] EE -> x={final_ee.x:.4f}  y={final_ee.y:.4f}  z={final_ee.z:.4f}")
+                                conn.sendall(b'{"status":"done"}\n')
                     threading.Thread(target=_do_xyz, daemon=True).start()
 
                 elif msg["cmd"] == "move_joints":

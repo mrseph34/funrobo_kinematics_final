@@ -52,9 +52,18 @@ class ArucoCameraTracker:
         self.frame = None
 
     def open_camera(self):
-        self.cap = cv2.VideoCapture(self.video_id)
-        if not self.cap.isOpened():
-            raise RuntimeError("Camera failed to open")
+        prev_log = cv2.setLogLevel(0)
+        for vid_id in range(32):
+            c = cv2.VideoCapture(vid_id)
+            if c.isOpened():
+                ret, frame = c.read()
+                if ret and frame is not None:
+                    cv2.setLogLevel(prev_log)
+                    self.cap = c
+                    return
+            c.release()
+        cv2.setLogLevel(prev_log)
+        raise RuntimeError("Camera failed to open")
 
     def capture_frame_after_delay(self, delay_sec=0.5, verbose=True):
         """

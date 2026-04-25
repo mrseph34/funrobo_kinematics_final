@@ -50,6 +50,8 @@ class ArmControlGUI:
 
         self._brain_proc = None
         self._obstacles = list(INIT_BOXES)
+        self._mvp_detect_result = None
+        self._mvp_waiting_detect = False
 
         self._build_ui()
         self._launch_brain()
@@ -286,6 +288,8 @@ class ArmControlGUI:
                    command=self._move_xyz).pack(fill="x", pady=4)
         ttk.Button(panel, text="⌂  HOME", style="Dim.TButton",
                    command=self._home).pack(fill="x", pady=2)
+        ttk.Button(panel, text="RUN MVP", style="Accent.TButton",
+                   command=self._run_mvp).pack(fill="x", pady=4)
 
         tk.Label(outer, textvariable=self.status, bg=BG, fg="#888899",
                  font=("Courier", 9), anchor="w").pack(fill="x", pady=(12, 0))
@@ -590,6 +594,8 @@ class ArmControlGUI:
                             self.status.set(f"Error: {msg.get('msg', '')}")
                         elif msg.get("cmd") == "detect_result":
                             print(f"[GUI RECV detect_result] {msg}")
+                            if self._mvp_waiting_detect:
+                                self._mvp_detect_result = msg
                             if "error" in msg:
                                 self.root.after(0, lambda m=msg: self.status.set(f"Detect: {m['error']}"))
                             else:
@@ -755,6 +761,15 @@ class ArmControlGUI:
             return
         if self._send_gripper({"cmd": "gripper", "action": "set", "width": w}):
             self.status.set(f"Gripper set to {abs(w)}...")
+
+    def _run_mvp(self):
+        if not self.sock:
+            self.status.set("Not connected to Pi.")
+            return
+        self.status.set("MVP running...")
+        import mvp
+        import threading
+        threading.Thread(target=mvp.run, args=(self,), daemon=True).start()
 
     def _home(self):
         print(f"[GUI] _home clicked")

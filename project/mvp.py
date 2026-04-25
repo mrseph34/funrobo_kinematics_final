@@ -1,31 +1,54 @@
-from project.object_detection import ArucoCameraTracker
-import server_funcs as sf
+import time
 
-tracker = ArucoCameraTracker(video_id=0)
 block_found = 0
-scan_pts = [[],[]] #i just put 2 in here as placeholder FILL IN
-home = [] #xyz FILL IN
-reverse_home = [] #xyz FILL IN
-straight_up = [] #xyz
+scan_pts = [[0, 0, 90, -60, 0], [-50, 0, 90, -60, 0], [50, 0, 90, -60, 0]] #scan joint positions
+home = [0, 0, 90, -30, 0] #home joints
+dropoff = [0, 200, -150] #xyz dropoff
 block_pos = [] #xyz to be filled in during CV pipeline
-speed = 0 #use an actual speed here
+speed = 300 #mm/s
 
 
-sf.move_to(home[0], home[1], home[2], speed, True, "Cubic")
-sf.robot.open_gripper()
-for i,pt in enumerate(scan_pts):
-    sf.move_to(pt[0], pt[1], pt[2], speed, True, "Cubic") #pt
-    ids, rvecs, tvecs, image = tracker.run()
-    #get pos
-    if block_pos is not None:
-        block_found = 1
+def run(gui):
+    global block_found, block_pos
+    block_found = 0
+    block_pos = []
 
-if block_found:
-    sf.move_to(block_pos[0], block_pos[1], block_pos[2], speed, True, "Cubic") #block_pos
-    sf.robot.close_gripper()
-    sf.move_to(reverse_home[0], reverse_home[1], reverse_home[2], speed, True, "Cubic") #reverse_home
-    sf.robot.open_gripper() #open gripper
-    sf.move_to(home[0], home[1], home[2], speed, True, "Cubic") #home
-else:
-    sf.move_to(straight_up[0], straight_up[1], straight_up[2], speed, True, "Cubic") #straight up 
+    gui._send_gripper({"cmd": "gripper", "action": "open", "width": -100}) #open gripper
+    time.sleep(1)
 
+    gui._send_atomic({"cmd": "stop"}, {"cmd": "move_joints", "joints": home, "speed_mms": speed, "traj_method": "Cubic", "fight_obstacles": False})
+    time.sleep(3)
+
+    for i, pt in enumerate(scan_pts):
+        gui._send_atomic({"cmd": "stop"}, {"cmd": "move_joints", "joints": pt, "speed_mms": speed, "traj_method": "Cubic", "fight_obstacles": False}) #pt
+        time.sleep(3)
+        gui._mvp_waiting_detect = True
+        gui.sock.sendall(((__import__("json").dumps({"cmd": "detect"})) + "\n").encode())
+        #get pos
+        for _ in range(100):
+            time.sleep(0.1)
+            if gui._mvp_detect_result is not None:
+                break
+        result = gui._mvp_detect_result
+        gui._mvp_detect_result = None
+        gui._mvp_waiting_detect = False
+        if result and "x_mm" in result:
+            block_pos = [result["x_mm"], result["y_mm"], result["z_mm"]]
+            block_found = 1
+            break
+
+    if block_found:
+        gui._send_atomic({"cmd": "stop"}, {"cmd": "move_xyz", "x_mm": block_pos[0], "y_mm": block_pos[1], "z_mm": block_pos[2], "speed_mms": speed, "use_aik": True, "phi_d": None, "traj_method": "Cubic", "fight_obstacles": False}) #block_pos
+        time.sleep(4)
+        gui._send_gripper({"cmd": "gripper", "action": "close", "width": -10})
+        time.sleep(1)
+        gui._send_atomic({"cmd": "stop"}, {"cmd": "move_xyz", "x_mm": dropoff[0], "y_mm": dropoff[1], "z_mm": dropoff[2], "speed_mms": speed, "use_aik": True, "phi_d": None, "traj_method": "Cubic", "fight_obstacles": False}) #dropoff
+        time.sleep(4)
+        gui._send_gripper({"cmd": "gripper", "action": "open", "width": -100}) #open gripper
+        time.sleep(1)
+        gui._send_atomic({"cmd": "stop"}, {"cmd": "move_joints", "joints": home, "speed_mms": speed, "traj_method": "Cubic", "fight_obstacles": False}) #home
+    else:
+        gui.root.after(0, lambda: gui.status.set("MVP: no block found, homing..."))
+        gui._send_gripper({"cmd": "gripper", "action": "close", "width": -10}) #close gripper
+        time.sleep(1)
+        gui._send_atomic({"cmd": "stop"}, {"cmd": "move_joints", "joints": home, "speed_mms": speed, "traj_method": "Cubic", "fight_obstacles": False}) #home

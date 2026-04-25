@@ -14,18 +14,22 @@ robot = None
 gripper_angle = 0.0
 _moving = False
 _last_joints = None
+_joint_last_time = 0.0
 
 
 def handle(conn):
-    global robot, gripper_angle, _moving, _last_joints
+    global robot, gripper_angle, _moving, _last_joints, _joint_last_time
     robot = HiwonderRobot()
     print("[PI] Robot ready")
     buf = ""
-    _last_print_time = 0.0
     try:
         while True:
             ready, _, _ = select.select([conn], [], [], 0.02)
             if not ready:
+                if _joint_last_time > 0 and time.time() - _joint_last_time >= 1.0:
+                    joints_str = "[" + ", ".join(f"{j:.1f}" for j in _last_joints) + "]"
+                    print(f"\r[PI JOINTS] {joints_str}")
+                    _joint_last_time = 0.0
                 continue
             try:
                 data = conn.recv(4096).decode()
@@ -41,19 +45,20 @@ def handle(conn):
                 if msg["cmd"] in ("set_joints", "move_joints"):
                     joints_deg = msg["joints"]
                     if not _moving:
-                        print(f"[PI MOVE START] {joints_deg}")
                         _moving = True
+                        print("[PI] [STREAMING]", end="", flush=True)
                     _last_joints = joints_deg
-                    now = time.time()
-                    if now - _last_print_time >= 1.0:
-                        print(f"[PI RECV] {msg['cmd']} {joints_deg}")
-                        _last_print_time = now
+                    _joint_last_time = time.time()
+                    joints_str = "[" + ", ".join(f"{j:.1f}" for j in joints_deg) + "]"
+                    print(f"\r[PI] [STREAMING] {joints_str}   ", end="", flush=True)
                     robot.set_joint_values(joints_deg + [gripper_angle], duration=1.0/20, radians=False)
                     conn.sendall(b'{"status":"done"}\n')
 
                 elif msg["cmd"] == "stop":
-                    if _moving and _last_joints is not None:
-                        print(f"[PI MOVE END] {_last_joints}")
+                    if _joint_last_time > 0 and _last_joints is not None:
+                        joints_str = "[" + ", ".join(f"{j:.1f}" for j in _last_joints) + "]"
+                        print(f"\r[PI JOINTS] {joints_str}")
+                        _joint_last_time = 0.0
                     _moving = False
                     _last_joints = None
 

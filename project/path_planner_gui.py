@@ -486,6 +486,18 @@ class ArmControlGUI:
                             self._mvp_move_result = "ik_failed"
                         elif msg.get("status") == "sim":
                             self._print_sim(msg)
+                        elif msg.get("cmd") == "transform_result":
+                            x = msg["x_mm"]
+                            y = msg["y_mm"]
+                            z = msg["z_mm"]
+                            print(f"[GUI RECV transform_result] transformed=({x:.1f},{y:.1f},{z:.1f}) mm")
+                            self._mvp_detect_result = msg
+                            def _update(x=x, y=y, z=z):
+                                self.xyz_entries["X"].delete(0, "end"); self.xyz_entries["X"].insert(0, f"{x:.1f}")
+                                self.xyz_entries["Y"].delete(0, "end"); self.xyz_entries["Y"].insert(0, f"{y:.1f}")
+                                self.xyz_entries["Z"].delete(0, "end"); self.xyz_entries["Z"].insert(0, f"{z:.1f}")
+                                self.status.set(f"Detected: ({x:.1f}, {y:.1f}, {z:.1f}) mm")
+                            self.root.after(0, _update)
                 else:
                     break
             except socket.timeout:
@@ -602,20 +614,15 @@ class ArmControlGUI:
                         elif msg.get("status") == "error":
                             self.status.set(f"Error: {msg.get('msg', '')}")
                         elif msg.get("cmd") == "detect_result":
-                            print(f"[GUI RECV detect_result] {msg}")
-                            self._mvp_detect_result = msg
+                            print(f"[GUI RECV detect_result] raw=({msg.get('x_mm')},{msg.get('y_mm')},{msg.get('z_mm')}) mm")
                             if "error" in msg:
+                                self._mvp_detect_result = msg
                                 self.root.after(0, lambda m=msg: self.status.set(f"Detect: {m['error']}"))
                             else:
-                                x = msg["x_mm"] + DETECT_OFFSET_MM[0]
-                                y = msg["y_mm"] + DETECT_OFFSET_MM[1]
-                                z = msg["z_mm"] + DETECT_OFFSET_MM[2]
-                                def _update(x=x, y=y, z=z):
-                                    self.xyz_entries["X"].delete(0, "end"); self.xyz_entries["X"].insert(0, f"{x:.1f}")
-                                    self.xyz_entries["Y"].delete(0, "end"); self.xyz_entries["Y"].insert(0, f"{y:.1f}")
-                                    self.xyz_entries["Z"].delete(0, "end"); self.xyz_entries["Z"].insert(0, f"{z:.1f}")
-                                    self.status.set(f"Detected: ({x:.1f}, {y:.1f}, {z:.1f}) mm")
-                                self.root.after(0, _update)
+                                try:
+                                    self._sim_sock.sendall((json.dumps({"cmd": "transform_detect", "x_mm": msg["x_mm"], "y_mm": msg["y_mm"], "z_mm": msg["z_mm"]}) + "\n").encode())
+                                except Exception as e:
+                                    print(f"[GUI] transform_detect send error: {e}")
                 else:
                     break
             except socket.timeout:

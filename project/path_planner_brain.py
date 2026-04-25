@@ -488,6 +488,19 @@ def handle(conn):
                             conn.sendall(b'{"status":"done"}\n')
                     threading.Thread(target=_do_joints, daemon=True).start()
 
+                elif msg["cmd"] == "transform_detect":
+                    _, Hlist = model.calc_forward_kinematics(curr_joints)
+                    T_base_EE = np.eye(4)
+                    for H in Hlist:
+                        T_base_EE = T_base_EE @ H
+                    R = T_base_EE[:3, :3]
+                    t = T_base_EE[:3, 3]
+                    p_cam = np.array([msg["x_mm"], msg["y_mm"], msg["z_mm"]]) / 1000
+                    p_base = R @ p_cam + t
+                    p_base_mm = p_base * 1000
+                    print(f"[MOTION] transform_detect: raw=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) -> transformed=({p_base_mm[0]:.1f},{p_base_mm[1]:.1f},{p_base_mm[2]:.1f}) mm")
+                    conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": p_base_mm[0], "y_mm": p_base_mm[1], "z_mm": p_base_mm[2]}) + "\n").encode())
+
                 elif msg["cmd"] == "detect":
                     def _do_detect(snap=curr_joints[:]):
                         try:

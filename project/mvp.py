@@ -23,9 +23,6 @@ def run(gui):
     block_found = 0
     block_pos = []
 
-    gui._send_gripper({"cmd": "gripper", "action": "open", "width": -100}) #open gripper
-    time.sleep(1)
-
     gui._send_atomic({"cmd": "stop"}, {"cmd": "move_joints", "joints": home, "speed_mms": speed, "traj_method": "Cubic", "fight_obstacles": False})
     time.sleep(3)
 
@@ -49,6 +46,8 @@ def run(gui):
             break
 
     if block_found:
+        gui._send_gripper({"cmd": "gripper", "action": "open", "width": -100}) #open gripper
+        time.sleep(1)
         gui._send_atomic({"cmd": "stop"}, {"cmd": "move_xyz", "x_mm": block_pos[0], "y_mm": block_pos[1], "z_mm": block_pos[2], "speed_mms": speed, "use_aik": True, "phi_d": None, "traj_method": "Cubic", "fight_obstacles": False}) #block_pos
         move_ok = _wait_move(gui, timeout=10)
         if move_ok == "ik_failed":

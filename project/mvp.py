@@ -32,6 +32,7 @@ def run(gui):
     for i, pt in enumerate(scan_pts):
         gui._send_atomic({"cmd": "stop"}, {"cmd": "move_joints", "joints": pt, "speed_mms": speed, "traj_method": "Cubic", "fight_obstacles": False}) #pt
         time.sleep(3)
+        gui._mvp_detect_result = None
         gui._mvp_waiting_detect = True
         gui.sock.sendall(((__import__("json").dumps({"cmd": "detect"})) + "\n").encode())
         #get pos

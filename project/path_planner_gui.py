@@ -8,7 +8,7 @@ import sys
 import time
 import os
 
-DETECT_OFFSET_MM = (0, 0, 0) 
+DETECT_OFFSET_MM = (0, -50, 0) 
 
 PI_HOST = "192.168.16.154"
 PI_PORT = 9698
@@ -487,10 +487,13 @@ class ArmControlGUI:
                         elif msg.get("status") == "sim":
                             self._print_sim(msg)
                         elif msg.get("cmd") == "transform_result":
-                            x = msg["x_mm"]
-                            y = msg["y_mm"]
-                            z = msg["z_mm"]
-                            print(f"[GUI RECV transform_result] transformed=({x:.1f},{y:.1f},{z:.1f}) mm")
+                            x = msg["x_mm"] + DETECT_OFFSET_MM[0]
+                            y = msg["y_mm"] + DETECT_OFFSET_MM[1]
+                            z = msg["z_mm"] + DETECT_OFFSET_MM[2]
+                            if DETECT_OFFSET_MM != (0, 0, 0):
+                                print(f"[GUI RECV transform_result] transformed=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) + offset{DETECT_OFFSET_MM} -> ({x:.1f},{y:.1f},{z:.1f}) mm")
+                            else:
+                                print(f"[GUI RECV transform_result] transformed=({x:.1f},{y:.1f},{z:.1f}) mm")
                             self._mvp_detect_result = msg
                             def _update(x=x, y=y, z=z):
                                 self.xyz_entries["X"].delete(0, "end"); self.xyz_entries["X"].insert(0, f"{x:.1f}")

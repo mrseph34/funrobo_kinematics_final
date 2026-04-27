@@ -489,14 +489,15 @@ def handle(conn):
                     threading.Thread(target=_do_joints, daemon=True).start()
 
                 elif msg["cmd"] == "transform_detect":
-                    _, Hlist = model.calc_forward_kinematics(curr_joints)
-                    T_base_EE = np.eye(4)
-                    for H in Hlist:
-                        T_base_EE = T_base_EE @ H
-                    R = T_base_EE[:3, :3]
-                    t = T_base_EE[:3, 3]
-                    p_cam = np.array([msg["x_mm"], msg["y_mm"], msg["z_mm"]]) / 1000
-                    p_base = R @ p_cam + t
+                    T_cam_base = np.array([
+                        [0.9737, -0.1124, -0.1981, -0.0554],
+                        [0.2273, 0.5377, 0.8119, -0.05759],
+                        [0.01524, -0.8356, 0.5491, 0.268],
+                        [0, 0, 0, 1]
+                    ])
+                    p_cam_h = np.array([msg["x_mm"] / 1000, msg["y_mm"] / 1000, msg["z_mm"] / 1000, 1.0])
+                    p_base_h = T_cam_base @ p_cam_h
+                    p_base = p_base_h[:3]
                     p_base_mm = p_base * 1000
                     print(f"[MOTION] transform_detect: raw=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) -> transformed=({p_base_mm[0]:.1f},{p_base_mm[1]:.1f},{p_base_mm[2]:.1f}) mm")
                     conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": p_base_mm[0], "y_mm": p_base_mm[1], "z_mm": p_base_mm[2]}) + "\n").encode())

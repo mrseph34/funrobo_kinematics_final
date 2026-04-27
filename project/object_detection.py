@@ -8,7 +8,7 @@ class ArucoCameraTracker:
     def __init__(
         self,
         video_id=1,
-        save_path="./fun_kene_scripts/img/img1.png",
+        save_path="/home/pi/funrobo_kinematics_final/project/img/img1.png",
         marker_length=0.0254
     ):
         """
@@ -127,10 +127,15 @@ class ArucoCameraTracker:
 
         ids, rvecs, tvecs = self.detect_and_estimate_pose(undistorted, verbose=verbose)
 
-        if ids is not None and verbose:
-            print("Detected markers:", ids.flatten())
-            print("Rotation vectors:\n", rvecs)
-            print("Translation vectors:\n", tvecs)
+        if ids is not None:
+            annotated = undistorted.copy()
+            cv2.aruco.drawDetectedMarkers(annotated, corners, ids)
+            ts = int(time.time() * 1000)
+            cv2.imwrite(f"/home/pi/funrobo_kinematics_final/project/img/detect_{ts}.png", annotated)
+            if verbose:
+                print("Detected markers:", ids.flatten())
+                print("Rotation vectors:\n", rvecs)
+                print("Translation vectors:\n", tvecs)
 
         self.cleanup()
 

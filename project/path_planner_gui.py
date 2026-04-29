@@ -8,7 +8,7 @@ import sys
 import time
 import os
 
-DETECT_OFFSET_MM = (-10, 0, 175) 
+DETECT_OFFSET_MM = (0, 0, 0) # (-10, 0, 175) 
 
 PI_HOST = "192.168.16.154"
 PI_PORT = 9698
@@ -20,6 +20,67 @@ INIT_BOXES = [
     (-100, 0, -200, 100, 100, -100),
 ]
 
+
+########### TESSSST BASE TO EE TRANSFORMS ###########
+import numpy as np
+
+# def transform(cam_x, cam_y, cam_z, pitch, yaw, roll, x_c, y_c, z_c):
+#     p, y, r = np.radians(-pitch), np.radians(yaw), np.radians(roll)
+#     Rx = np.array([[1,0,0],[0,np.cos(p),-np.sin(p)],[0,np.sin(p),np.cos(p)]])
+#     Ry = np.array([[np.cos(y),0,np.sin(y)],[0,1,0],[-np.sin(y),0,np.cos(y)]])
+#     Rz = np.array([[np.cos(r),-np.sin(r),0],[np.sin(r),np.cos(r),0],[0,0,1]])
+#     T_cam = np.eye(4)
+#     T_cam[:3,:3] = Ry @ Rx @ Rz
+#     T_cam[0,3], T_cam[1,3], T_cam[2,3] = cam_x, cam_y, cam_z
+#     p_base_h = T_cam @ np.array([x_c/1000, y_c/1000, z_c/1000, 1.0])
+#     return p_base_h[:3] * 1000
+
+# tests = [
+#     # (cam_x, cam_y, cam_z, pitch, yaw, roll, x_c, y_c, z_c, expected_x, expected_y, expected_z, label)
+#     # pitch=-90 straight down, block at ground
+#     (0.0, 0.094, 0.095, -90, 0, 0,  0,  0, 94,   0,  0, 95, "base: straight down, ground"),
+#     (0.0, 0.094, 0.095, -90, 0, 0, 10,  0, 94,  10,  0, 95, "base: straight down, 10mm right"),
+#     # cam_x +10mm
+#     (0.01, 0.094, 0.095, -90, 0, 0, 0, 0, 94, 10, 0, 95, "cam_x+10mm"),
+#     # cam_y +10mm
+#     (0.0, 0.104, 0.095, -90, 0, 0, 0,  0, 104,  0,  0, 95, "cam_y+10mm, depth+10"),
+#     # cam_z +10mm
+#     (0.0, 0.094, 0.105, -90, 0, 0, 0,  0, 94,   0,  0, 105, "cam_z+10mm"),
+#     # pitch=-60
+#     (0.0, 0.094, 0.095, -60, 0, 0, 0,  0, 100,  0, 94-100*np.sin(np.radians(60)), 95+100*np.cos(np.radians(60)), "pitch=-60, depth=100"),
+#     # pitch=-120
+#     (0.0, 0.094, 0.095, -120, 0, 0, 0, 0, 100,  0, 94-100*np.sin(np.radians(120)), 95+100*np.cos(np.radians(120)), "pitch=-120, depth=100"),
+    
+    
+
+#     # yaw=90
+#     (0.095, 0.094, 0.0, -90, 90, 0, 0, 0, 94, 95, 0, 0, "yaw=90, camera to the right"),
+#     # yaw=-90
+#     (-0.095, 0.094, 0.0, -90, -90, 0, 0, 0, 94, -95, 0, 0, "yaw=-90, camera to the left"),
+#     # yaw=90, pitch=-60, block forward in cam
+#     (0.0, 0.094, 0.095, -60, 90, 0, 0, 0, 100, 50, 7.4, 95, "yaw=90, pitch=-60, depth=100"),
+#     # yaw=180, camera facing backward, block forward in cam -> backward in base
+#     (0.0, 0.094, 0.095, -90, 180, 0, 0, 0, 94, 0, 0, 95, "yaw=180, block below, facing backward"),
+    
+    
+#     # roll=90, block directly below
+#     (0.0, 0.094, 0.095, -90, 0, 90, 0, 0, 94, 0, 0, 95, "roll=90, block directly below"),
+#     # roll=90, block 10mm right in cam -> now 10mm further in cam-Z -> forward in base
+#     (0.0, 0.094, 0.095, -90, 0, 90, 10, 0, 94, 0, 0, 105, "roll=90, block 10mm right in cam"),
+#     # roll=-90, block 10mm right in cam -> 10mm backward in cam-Z
+#     (0.0, 0.094, 0.095, -90, 0, -90, 10, 0, 94, 0, 0, 85, "roll=-90, block 10mm right in cam"),
+# ]
+
+# for t in tests:
+#     cam_x, cam_y, cam_z, pitch, yaw, roll, x_c, y_c, z_c, ex, ey, ez, label = t
+#     res = transform(cam_x, cam_y, cam_z, pitch, yaw, roll, x_c, y_c, z_c)
+#     ok = "✓" if abs(res[0]-ex)<1 and abs(res[1]-ey)<1 and abs(res[2]-ez)<1 else "✗"
+#     print(f"{ok} {label}")
+#     print(f"   cam pos:   ({cam_x*1000:.0f}, {cam_y*1000:.0f}, {cam_z*1000:.0f}) mm")
+#     print(f"   cam block: ({x_c:.0f}, {y_c:.0f}, {z_c:.0f}) mm")
+#     print(f"   got:       ({res[0]:.1f}, {res[1]:.1f}, {res[2]:.1f}) mm")
+#     print(f"   expected:  ({ex:.1f}, {ey:.1f}, {ez:.1f}) mm")
+#     print()
 
 class ArmControlGUI:
     def __init__(self, root):
@@ -50,12 +111,14 @@ class ArmControlGUI:
         self._sim_viz_proc = None
         self._sim_sock = None
         self._sim_buf = ""
+        self._viz_sock = None
 
         self._brain_proc = None
         self._obstacles = list(INIT_BOXES)
         self._mvp_detect_result = None
         self._mvp_waiting_detect = False
         self._mvp_move_result = None
+        self._sim_blocks = [(0, 0, 100)]
 
         self._build_ui()
         self._launch_brain()
@@ -281,6 +344,29 @@ class ArmControlGUI:
         )
         self._toggle_obs_count()
 
+        SB_BG = "#1a2235"
+        SB_INNER = "#1e2840"
+        self._sb_row = tk.Frame(panel, bg=SB_INNER, bd=0, highlightthickness=1,
+                                highlightbackground="#2a4060")
+        tk.Label(self._sb_row, text="SIM BLOCK (mm)", bg=SB_INNER, fg="#66aacc",
+                 font=("Courier", 8, "bold"), padx=8).pack(side="left")
+        self._sb_entries = []
+        for lbl, default in zip(["x", "y", "z"], self._sim_blocks[0]):
+            col = tk.Frame(self._sb_row, bg=SB_INNER)
+            col.pack(side="left", padx=3, pady=4)
+            tk.Label(col, text=lbl, bg=SB_INNER, fg="#556688",
+                     font=("Courier", 7)).pack()
+            e = tk.Entry(col, width=6, bg="#151c2e", fg="#88ccee",
+                         insertbackground="#00e5ff", font=("Courier", 9), bd=0,
+                         justify="center", highlightthickness=1,
+                         highlightbackground="#2a4060", highlightcolor="#00e5ff")
+            e.insert(0, str(int(default)))
+            e.pack()
+            self._sb_entries.append(e)
+        ttk.Button(self._sb_row, text="Sim Detect", style="Dim.TButton",
+                   command=self._sim_detect).pack(side="right", padx=6)
+        self._update_sb_count = lambda: None
+
         gripper_row = ttk.Frame(panel, style="Dark.TFrame")
         gripper_row.pack(fill="x", pady=4)
         ttk.Button(gripper_row, text="CLOSE E.E.", style="Dim.TButton",
@@ -307,6 +393,55 @@ class ArmControlGUI:
                  font=("Courier", 9), anchor="w").pack(fill="x", pady=(12, 0))
 
         self._on_mode_change()
+
+    def _fmt_block(self, blk):
+        return "({:.0f}, {:.0f}, {:.0f})".format(*blk)
+
+    def _sb_add(self):
+        pass
+
+    def _sb_remove(self):
+        pass
+
+    def _send_sim_blocks(self):
+        if self._sim_sock:
+            try:
+                self._sim_sock.sendall((json.dumps({"cmd": "set_sim_blocks", "blocks": list(self._sim_blocks)}) + "\n").encode())
+            except Exception:
+                pass
+
+    def _sim_detect(self):
+        try:
+            vals = [float(e.get()) for e in self._sb_entries]
+        except ValueError:
+            self.status.set("Invalid sim block values.")
+            return
+        self._sim_blocks[0] = tuple(vals)
+        self._send_sim_blocks()
+        bx, by, bz = self._sim_blocks[0]
+        # base -> cam: invert T_cam
+        cam_x, cam_y, cam_z = 0.0, 0.094, 0.095
+        pitch, yaw, roll = -90, 0, 0.0
+        p_r, y_r, r_r = np.radians(-pitch), np.radians(yaw), np.radians(roll)
+        Rx = np.array([[1,0,0],[0,np.cos(p_r),-np.sin(p_r)],[0,np.sin(p_r),np.cos(p_r)]])
+        Ry = np.array([[np.cos(y_r),0,np.sin(y_r)],[0,1,0],[-np.sin(y_r),0,np.cos(y_r)]])
+        Rz = np.array([[np.cos(r_r),-np.sin(r_r),0],[np.sin(r_r),np.cos(r_r),0],[0,0,1]])
+        T_cam = np.eye(4)
+        T_cam[:3,:3] = Ry @ Rx @ Rz
+        T_cam[0,3], T_cam[1,3], T_cam[2,3] = cam_x, cam_y, cam_z
+        R = T_cam[:3, :3]
+        t = T_cam[:3, 3]
+        p_base = np.array([bx / 1000.0, by / 1000.0, bz / 1000.0])
+        p_cam = R.T @ (p_base - t)
+        x_mm, y_mm, z_mm = p_cam[0] * 1000, p_cam[1] * 1000, p_cam[2] * 1000
+        print(f"[SIM DETECT] block=({bx},{by},{bz}) -> cam=({x_mm:.1f},{y_mm:.1f},{z_mm:.1f}) mm")
+        if self._sim_sock:
+            try:
+                self._sim_sock.sendall((json.dumps({"cmd": "transform_detect", "x_mm": x_mm, "y_mm": y_mm, "z_mm": z_mm}) + "\n").encode())
+            except Exception as e:
+                self.status.set(f"Sim detect error: {e}")
+        else:
+            self.status.set("Brain not connected.")
 
     def _fmt_box(self, box):
         return "({:.0f},{:.0f},{:.0f}) → ({:.0f},{:.0f},{:.0f})".format(*box)
@@ -371,6 +506,7 @@ class ArmControlGUI:
     def _start_sim(self):
         if self._sim_proc is not None:
             return
+        self._sb_row.pack(fill="x", pady=(10, 4))
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             examples_dir = os.path.join(os.path.dirname(script_dir), "examples")
@@ -403,6 +539,7 @@ class ArmControlGUI:
                             msg = {"cmd": "set_obstacles", "boxes": list(self._obstacles[:i+1])}
                             self._send(msg)
                             time.sleep(0.1)
+                        self._send_sim_blocks()
                     threading.Thread(target=_send_one_by_one, daemon=True).start()
                     self.root.after(500, self._poll_sim)
                     return
@@ -465,6 +602,13 @@ class ArmControlGUI:
         self.root.destroy()
 
     def _stop_sim(self):
+        self._sb_row.pack_forget()
+        if self._viz_sock:
+            try:
+                self._viz_sock.close()
+            except Exception:
+                pass
+            self._viz_sock = None
         if self._sim_sock:
             try:
                 self._sim_sock.close()

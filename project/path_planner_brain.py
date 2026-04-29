@@ -488,77 +488,83 @@ def handle(conn):
                             conn.sendall(b'{"status":"done"}\n')
                     threading.Thread(target=_do_joints, daemon=True).start()
 
+                # elif msg["cmd"] == "transform_detect":
+                #     j1 = curr_joints[0]
+                #     print(f"--------------------j1={np.degrees(j1):.2f}")
+                #     x_c, y_c, z_c = msg["x_mm"]/1000, msg["y_mm"]/1000, msg["z_mm"]/1000
+                #     print(f"[MOTION] EE CAMMMMMM: x={x_c:.4f} y={y_c:.4f} z={z_c:.4f}")
+                #     x_gui_raw = x_c * 1000
+                #     z_gui_raw = -y_c * 1000
+                #     deg = round(np.degrees(j1))
+                #     print(f'deggggggggg: {deg}')
+                #     if deg == 45:
+                #         x_gui = ((x_gui_raw - z_gui_raw) * 0.7071) - 120
+                #         z_gui = ((x_gui_raw + z_gui_raw) * 0.7071) - 70
+                #     elif deg == -45:
+                #         x_gui = ((x_gui_raw + z_gui_raw) * 0.7071) + 120
+                #         z_gui = ((-x_gui_raw + z_gui_raw) * 0.7071) - 50
+                #     # if deg == 44:
+                #     #     x_gui = ((x_gui_raw - z_gui_raw) * 0.7071) - 90
+                #     #     z_gui = ((x_gui_raw + z_gui_raw) * 0.7071) - 50
+                #     # elif deg == -44:
+                #     #     x_gui = ((x_gui_raw + z_gui_raw) * 0.7071) + 80
+                #     #     z_gui = ((-x_gui_raw + z_gui_raw) * 0.7071) - 30
+                #     # elif deg == 1:
+                #     #     x_gui = x_gui_raw
+                #     #     z_gui = z_gui_raw - 50
+                #     else:
+                #         x_gui = x_gui_raw
+                #         z_gui = z_gui_raw
+                #     y_gui = 10
+                #     print(f"[MOTION] transform_detect: raw=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) -> transformed=({x_gui:.1f},{y_gui:.1f},{z_gui:.1f}) mm")
+                #     conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": x_gui, "y_mm": y_gui, "z_mm": z_gui}) + "\n").encode())
+                
+                elif msg["cmd"] == "get_ee":
+                    ee, Hlist = model.calc_forward_kinematics(curr_joints)
+                    cam_x, cam_y, cam_z = ee.y, ee.z, -ee.x
+                    T = np.eye(4)
+                    for Hi in Hlist:
+                        T = T @ Hi
+                    R = T[:3,:3]
+                    pitch = (np.degrees(np.arctan2(R[0,2], R[0,0])) - 90) + 180
+                    yaw = np.degrees(np.arcsin(np.clip(R[0,1], -1, 1)))
+                    roll = 0
+                    conn.sendall((json.dumps({"cmd": "ee_result", "cam_x": cam_x, "cam_y": cam_y, "cam_z": cam_z, "pitch": pitch, "yaw": yaw, "roll": roll}) + "\n").encode())
+                
                 elif msg["cmd"] == "transform_detect":
-                    j1 = curr_joints[0]
-                    print(f"--------------------j1={np.degrees(j1):.2f}")
+                    ee, Hlist = model.calc_forward_kinematics(curr_joints)
+                    # y, z, -x
+                    cam_x, cam_y, cam_z = ee.y, ee.z, -ee.x
+                    T = np.eye(4)
+                    for Hi in Hlist:
+                        T = T @ Hi
+                    R = T[:3,:3]
+                    # print(f"R rows: {np.degrees(np.arctan2(R[2,1],R[2,2])):.0f}, {np.degrees(np.arctan2(R[0,2],R[0,0])):.0f}, {np.degrees(np.arctan2(R[1,0],R[0,0])):.0f}, {np.degrees(np.arcsin(-R[2,0])):.0f}, {np.degrees(np.arcsin(R[1,2])):.0f}, {np.degrees(np.arcsin(-R[0,1])):.0f}")
+                    # camera forward in base frame
+                    pitch = (np.degrees(np.arctan2(R[0,2], R[0,0])) - 90) + 180
+                    yaw = np.degrees(np.arcsin(np.clip(R[0,1], -1, 1)))
+                    roll = 0 # -np.degrees(np.arctan2(R[2,1], R[2,2]))
+                    # from scipy.spatial.transform import Rotation
+                    # rot = Rotation.from_matrix(R)
+                    # angles = rot.as_euler('xyz', degrees=True)
+                    # pitch = angles[0]
+                    # yaw = angles[1]  
+                    # roll = angles[2]
+                    p, yw, r = np.radians(-pitch), np.radians(yaw), np.radians(roll)
+                    Rx = np.array([[1,0,0],[0,np.cos(p),-np.sin(p)],[0,np.sin(p),np.cos(p)]])
+                    Ry = np.array([[np.cos(yw),0,np.sin(yw)],[0,1,0],[-np.sin(yw),0,np.cos(yw)]])
+                    Rz = np.array([[np.cos(r),-np.sin(r),0],[np.sin(r),np.cos(r),0],[0,0,1]])
+                    T_cam = np.eye(4)
+                    T_cam[:3,:3] = Ry @ Rx @ Rz
+                    T_cam[0,3], T_cam[1,3], T_cam[2,3] = cam_x, cam_y, cam_z
                     x_c, y_c, z_c = msg["x_mm"]/1000, msg["y_mm"]/1000, msg["z_mm"]/1000
+                    print(f"[MOTION] EE POSSSSS: x={cam_x:.4f} y={cam_y:.4f} z={cam_z:.4f}")
+                    print(f"[MOTION] EE ANGLES: pitch={pitch:.2f} yaw={yaw:.2f} roll={roll:.2f}")
                     print(f"[MOTION] EE CAMMMMMM: x={x_c:.4f} y={y_c:.4f} z={z_c:.4f}")
-                    x_gui_raw = x_c * 1000
-                    z_gui_raw = -y_c * 1000
-                    deg = round(np.degrees(j1))
-                    print(f'deggggggggg: {deg}')
-                    if deg == 45:
-                        x_gui = ((x_gui_raw - z_gui_raw) * 0.7071) - 120
-                        z_gui = ((x_gui_raw + z_gui_raw) * 0.7071) - 70
-                    elif deg == -45:
-                        x_gui = ((x_gui_raw + z_gui_raw) * 0.7071) + 120
-                        z_gui = ((-x_gui_raw + z_gui_raw) * 0.7071) - 50
-                    # if deg == 44:
-                    #     x_gui = ((x_gui_raw - z_gui_raw) * 0.7071) - 90
-                    #     z_gui = ((x_gui_raw + z_gui_raw) * 0.7071) - 50
-                    # elif deg == -44:
-                    #     x_gui = ((x_gui_raw + z_gui_raw) * 0.7071) + 80
-                    #     z_gui = ((-x_gui_raw + z_gui_raw) * 0.7071) - 30
-                    # elif deg == 1:
-                    #     x_gui = x_gui_raw
-                    #     z_gui = z_gui_raw - 50
-                    else:
-                        x_gui = x_gui_raw
-                        z_gui = z_gui_raw
-                    y_gui = 10
+                    p_base_h = T_cam @ np.array([x_c, y_c, z_c, 1.0])
+                    x_gui, y_gui, z_gui = p_base_h[0]*1000, p_base_h[1]*1000, p_base_h[2]*1000
                     print(f"[MOTION] transform_detect: raw=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) -> transformed=({x_gui:.1f},{y_gui:.1f},{z_gui:.1f}) mm")
                     conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": x_gui, "y_mm": y_gui, "z_mm": z_gui}) + "\n").encode())
-                # elif msg["cmd"] == "transform_detect":
-                #     _, Hlist = model.calc_forward_kinematics(curr_joints)
-                #     ee, _ = model.calc_forward_kinematics(curr_joints)
-                #     ee.roty = -(ee.roty + np.pi/2)
-                #     ee.rotx = -ee.rotx
-                #     ee.rotz = -ee.rotz
-                #     roll, pitch, yaw = 0, -1.0472, 0
-                #     print(f"--------------------rotx={np.degrees(roll):.2f} roty={np.degrees(pitch):.2f} rotz={np.degrees(yaw):.2f}")
-                #     T_base_EE = np.eye(4)
-                #     for Hi in Hlist:
-                #         T_base_EE = T_base_EE @ Hi
-                #     x, y, z = T_base_EE[0,3], T_base_EE[1,3], T_base_EE[2,3]
-                #     T_base_EE[0,3], T_base_EE[1,3], T_base_EE[2,3] = y, z, -x
-                #     cr, cp, cy = roll, pitch, yaw
-                #     Rx = np.array([[1,0,0],[0,np.cos(cr),-np.sin(cr)],[0,np.sin(cr),np.cos(cr)]])
-                #     Ry = np.array([[np.cos(cp),0,np.sin(cp)],[0,1,0],[-np.sin(cp),0,np.cos(cp)]])
-                #     Rz = np.array([[np.cos(cy),-np.sin(cy),0],[np.sin(cy),np.cos(cy),0],[0,0,1]])
-                #     T_base_EE[:3,:3] = Rz @ Ry @ Rx
-                #     R = T_base_EE[:3,:3]
-                #     T_base_EE[:3, :3] = np.eye(3)
-                #     roll_r = np.degrees(np.arctan2(R[2,1], R[2,2]))
-                #     pitch_r = np.degrees(np.arctan2(-R[2,0], np.sqrt(R[2,1]**2 + R[2,2]**2)))
-                #     yaw_r = np.degrees(np.arctan2(R[1,0], R[0,0]))
-                #     print(f"[MOTION] EE POSSSSS: x={T_base_EE[0,3]:.4f} y={T_base_EE[1,3]:.4f} z={T_base_EE[2,3]:.4f}")
-                #     print(f"[MOTION] EE ANGLES: roll={roll_r:.2f} pitch={pitch_r:.2f} yaw={yaw_r:.2f}")
-                #     x_c, y_c, z_c = -msg["x_mm"]/1000, -msg["y_mm"]/1000, msg["z_mm"]/1000
-                #     #print cam pos from msg
-                #     print(f"[MOTION] EE CAMMMMMM: x={x_c:.4f} y={y_c:.4f} z={z_c:.4f}")
-                #     p_cam_h = np.array([x_c, y_c, z_c, 1.0])
-                #     p_base_h = T_base_EE @ p_cam_h
-                #     x_fk, y_fk, z_fk = p_base_h[0], p_base_h[1], p_base_h[2]
-                #     x_gui = -x_fk * 1000
-                #     y_gui = 10
-                #     z_gui = y_fk * 1000
-                #     if x_gui > 0:
-                #         x_gui -= 10
-                #         z_gui += 100
-                #     # print(f"[MOTION] EE pos: x={T_base_EE[0,3]:.4f} y={T_base_EE[1,3]:.4f} z={T_base_EE[2,3]:.4f}")
-                #     # print(f"[MOTION] p_cam_h={p_cam_h} -> p_base_h={p_base_h}")
-                #     # print(f"[MOTION] transform_detect: raw=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) -> transformed=({x_gui:.1f},{y_gui:.1f},{z_gui:.1f}) mm")
-                #     conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": x_gui, "y_mm": y_gui, "z_mm": z_gui}) + "\n").encode())
 
                 elif msg["cmd"] == "detect":
                     def _do_detect(snap=curr_joints[:]):
@@ -592,6 +598,10 @@ def handle(conn):
                     _connect_sim()
                     _send(_sim_sock, _sim_lock, msg)
                     conn.sendall(b'{"status":"done"}\n')
+
+                elif msg["cmd"] == "set_sim_blocks":
+                    _connect_sim()
+                    _send(_sim_sock, _sim_lock, msg)
 
     except Exception as e:
         print(f"[MOTION ERROR] {e}")

@@ -38,6 +38,7 @@ _LINK_RADIUS = 0.03
 model = None
 plot_queue = queue.Queue()
 _obstacles = []
+_sim_blocks = []
 
 BOX_COLORS = ["#ff4466", "#ffaa00", "#00e5ff", "#aa44ff", "#44ff88", "#ff8800", "#ff44ff"]
 
@@ -94,6 +95,12 @@ def handle(conn):
                     _obstacles.extend(_boxes_from_gui(raw))
                     plot_queue.put({"obstacles": list(_obstacles)})
 
+                elif msg["cmd"] == "set_sim_blocks":
+                    raw = msg.get("blocks", [])
+                    _sim_blocks.clear()
+                    _sim_blocks.extend(raw)
+                    plot_queue.put({"sim_blocks": list(_sim_blocks)})
+
     except Exception as e:
         print(f"[SIM ERROR] {e}")
     finally:
@@ -144,6 +151,36 @@ def run_visualizer():
 
     box_patches = []
     link_patches = []
+    sim_block_patches = []
+
+    def draw_sim_blocks():
+        for p in sim_block_patches:
+            try:
+                p.remove()
+            except Exception:
+                pass
+        sim_block_patches.clear()
+        BLOCK_SIZE = 0.04  # 40mm cube
+        for blk in _sim_blocks:
+            bx, by, bz = blk[0], blk[1], blk[2]
+            # remap base frame (x right, y up, z forward) to plot frame via remap()
+            cx, cy, cz = remap(bx, by, bz)
+            h = BLOCK_SIZE / 2
+            x1, x2 = cx - h, cx + h
+            y1, y2 = cy - h, cy + h
+            z1, z2 = cz - h, cz + h
+            verts = [
+                [(x1,y1,z1),(x2,y1,z1),(x2,y2,z1),(x1,y2,z1)],
+                [(x1,y1,z2),(x2,y1,z2),(x2,y2,z2),(x1,y2,z2)],
+                [(x1,y1,z1),(x1,y1,z2),(x1,y2,z2),(x1,y2,z1)],
+                [(x2,y1,z1),(x2,y1,z2),(x2,y2,z2),(x2,y2,z1)],
+                [(x1,y1,z1),(x2,y1,z1),(x2,y1,z2),(x1,y1,z2)],
+                [(x1,y2,z1),(x2,y2,z1),(x2,y2,z2),(x1,y2,z2)],
+            ]
+            poly = Poly3DCollection(verts, alpha=0.08, facecolor="#00e5ff", edgecolor="#00e5ff", linewidth=1.2)
+            ax.add_collection3d(poly)
+            sim_block_patches.append(poly)
+
 
     def draw_boxes():
         for p in box_patches:
@@ -240,6 +277,7 @@ def run_visualizer():
         degs = [round(np.rad2deg(j), 1) for j in joints_rad]
         title.set_text(f"EE: ({ee.x:.3f}, {ee.y:.3f}, {ee.z:.3f}) m\nJoints (deg): {degs}")
         draw_boxes()
+        draw_sim_blocks()
         draw_link_boxes(pts)
         fig.canvas.draw_idle()
         fig.canvas.flush_events()
@@ -253,6 +291,10 @@ def run_visualizer():
             item = plot_queue.get_nowait()
             if isinstance(item, dict) and "obstacles" in item:
                 draw_boxes()
+                fig.canvas.draw_idle()
+                redraw(curr)
+            elif isinstance(item, dict) and "sim_blocks" in item:
+                draw_sim_blocks()
                 fig.canvas.draw_idle()
                 redraw(curr)
             else:

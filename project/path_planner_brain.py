@@ -274,6 +274,12 @@ def move_to_traj(x_m, y_m, z_m, speed, use_aik, traj_method, phi_d=None, gen=0, 
     if qf_list is None or len(qf_list) == 0:
         print(f"[MOTION] IK failed for ({x_m:.4f}, {y_m:.4f}, {z_m:.4f})")
         return False
+    for i in range(len(qf_list)):
+        diff = qf_list[i] - curr_joints[i]
+        if diff > np.pi:
+            qf_list[i] -= 2 * np.pi
+        elif diff < -np.pi:
+            qf_list[i] += 2 * np.pi
 
     if _move_gen != gen:
         return

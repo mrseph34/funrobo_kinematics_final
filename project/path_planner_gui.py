@@ -388,6 +388,8 @@ class ArmControlGUI:
                    command=self._home).pack(fill="x", pady=2)
         ttk.Button(panel, text="RUN MVP", style="Accent.TButton",
                    command=self._run_mvp).pack(fill="x", pady=4)
+        ttk.Button(panel, text="RUN MVP2", style="Accent.TButton",
+                   command=self._run_mvp2).pack(fill="x", pady=4)
 
         tk.Label(outer, textvariable=self.status, bg=BG, fg="#888899",
                  font=("Courier", 9), anchor="w").pack(fill="x", pady=(12, 0))
@@ -933,6 +935,15 @@ class ArmControlGUI:
         import mvp
         import threading
         threading.Thread(target=mvp.run, args=(self,), daemon=True).start()
+
+    def _run_mvp2(self):
+        if not self.sock:
+            self.status.set("Not connected to Pi.")
+            return
+        self.status.set("MVP2 running...")
+        import mvp2
+        import threading
+        threading.Thread(target=mvp2.run, args=(self,), daemon=True).start()
 
     def _home(self):
         print(f"[GUI] _home clicked")

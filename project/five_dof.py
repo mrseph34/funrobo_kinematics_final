@@ -101,6 +101,52 @@ class FiveDOFRobot(FiveDOFRobotTemplate):
         ee.rotx, ee.roty, ee.rotz = rpy[0], rpy[1], rpy[2]
 
         return ee, Hlist
+    
+    def calc_forward_kinematics2(self, joint_values: list, radians=True):
+        """
+        Calculate forward kinematics based on the provided joint angles.
+        
+        Args:
+            theta: List of joint angles (in degrees or radians).
+            radians: Boolean flag to indicate if input angles are in radians.
+        """
+        curr_joint_values = joint_values.copy()
+        
+        if not radians: # Convert degrees to radians if the input is in degrees
+            curr_joint_values = [np.deg2rad(theta) for theta in curr_joint_values]
+        
+        # Ensure that the joint angles respect the joint limits
+        for i, theta in enumerate(curr_joint_values):
+            curr_joint_values[i] = np.clip(theta, self.joint_limits[i][0], self.joint_limits[i][1])
+
+        # Set the Denavit-Hartenberg parameters for each joint
+        DH = np.zeros((self.num_dof, 4)) # [theta, d, a, alpha]
+        DH[0] = [curr_joint_values[0], self.l1, 0, -np.pi/2]
+        DH[1] = [curr_joint_values[1] - np.pi/2, 0, self.l2, np.pi]
+        DH[2] = [curr_joint_values[2], 0, self.l3, np.pi]
+        DH[3] = [curr_joint_values[3] + np.pi/2, 0, 0, np.pi/2]
+        DH[4] = [curr_joint_values[4], self.l4 + self.l5, 0, 0]
+
+        # Compute the transformation matrices
+        Hlist = [ut.dh_to_matrix(dh) for dh in DH]
+
+        # Precompute cumulative transformations to avoid redundant calculations
+        H_cumulative = [np.eye(4)]
+        for i in range(self.num_dof):
+            H_cumulative.append(H_cumulative[-1] @ Hlist[i])
+
+        # Calculate EE position and rotation
+        H_ee = H_cumulative[-1]  # Final transformation matrix for EE
+
+        # Set the end effector (EE) position
+        ee = ut.EndEffector()
+        ee.x, ee.y, ee.z = (H_ee @ np.array([0, 0, 0, 1]))[:3]
+        
+        # Extract and assign the RPY (roll, pitch, yaw) from the rotation matrix
+        rpy = ut.rotm_to_euler(H_ee[:3, :3])
+        ee.rotx, ee.roty, ee.rotz = rpy[0], rpy[1], rpy[2]
+
+        return ee, Hlist
 
 
     def calc_inverse_kinematics(self, ee: object, init_joint_values: list, phi_d=None, soln=0) -> list:

@@ -489,18 +489,76 @@ def handle(conn):
                     threading.Thread(target=_do_joints, daemon=True).start()
 
                 elif msg["cmd"] == "transform_detect":
-                    T_cam_base = np.array([
-                        [0.9737, -0.1124, -0.1981, -0.0554],
-                        [0.2273, 0.5377, 0.8119, -0.05759],
-                        [0.01524, -0.8356, 0.5491, 0.268],
-                        [0, 0, 0, 1]
-                    ])
-                    p_cam_h = np.array([msg["x_mm"] / 1000, msg["y_mm"] / 1000, msg["z_mm"] / 1000, 1.0])
-                    p_base_h = T_cam_base @ p_cam_h
-                    p_base = p_base_h[:3]
-                    p_base_mm = p_base * 1000
-                    print(f"[MOTION] transform_detect: raw=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) -> transformed=({p_base_mm[0]:.1f},{p_base_mm[1]:.1f},{p_base_mm[2]:.1f}) mm")
-                    conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": p_base_mm[0], "y_mm": p_base_mm[1], "z_mm": p_base_mm[2]}) + "\n").encode())
+                    j1 = curr_joints[0]
+                    print(f"--------------------j1={np.degrees(j1):.2f}")
+                    x_c, y_c, z_c = msg["x_mm"]/1000, msg["y_mm"]/1000, msg["z_mm"]/1000
+                    print(f"[MOTION] EE CAMMMMMM: x={x_c:.4f} y={y_c:.4f} z={z_c:.4f}")
+                    x_gui_raw = x_c * 1000
+                    z_gui_raw = -y_c * 1000
+                    deg = round(np.degrees(j1))
+                    print(f'deggggggggg: {deg}')
+                    if deg == 45:
+                        x_gui = ((x_gui_raw - z_gui_raw) * 0.7071) - 120
+                        z_gui = ((x_gui_raw + z_gui_raw) * 0.7071) - 70
+                    elif deg == -45:
+                        x_gui = ((x_gui_raw + z_gui_raw) * 0.7071) + 120
+                        z_gui = ((-x_gui_raw + z_gui_raw) * 0.7071) - 50
+                    # if deg == 44:
+                    #     x_gui = ((x_gui_raw - z_gui_raw) * 0.7071) - 90
+                    #     z_gui = ((x_gui_raw + z_gui_raw) * 0.7071) - 50
+                    # elif deg == -44:
+                    #     x_gui = ((x_gui_raw + z_gui_raw) * 0.7071) + 80
+                    #     z_gui = ((-x_gui_raw + z_gui_raw) * 0.7071) - 30
+                    # elif deg == 1:
+                    #     x_gui = x_gui_raw
+                    #     z_gui = z_gui_raw - 50
+                    else:
+                        x_gui = x_gui_raw
+                        z_gui = z_gui_raw
+                    y_gui = 10
+                    print(f"[MOTION] transform_detect: raw=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) -> transformed=({x_gui:.1f},{y_gui:.1f},{z_gui:.1f}) mm")
+                    conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": x_gui, "y_mm": y_gui, "z_mm": z_gui}) + "\n").encode())
+                # elif msg["cmd"] == "transform_detect":
+                #     _, Hlist = model.calc_forward_kinematics(curr_joints)
+                #     ee, _ = model.calc_forward_kinematics(curr_joints)
+                #     ee.roty = -(ee.roty + np.pi/2)
+                #     ee.rotx = -ee.rotx
+                #     ee.rotz = -ee.rotz
+                #     roll, pitch, yaw = 0, -1.0472, 0
+                #     print(f"--------------------rotx={np.degrees(roll):.2f} roty={np.degrees(pitch):.2f} rotz={np.degrees(yaw):.2f}")
+                #     T_base_EE = np.eye(4)
+                #     for Hi in Hlist:
+                #         T_base_EE = T_base_EE @ Hi
+                #     x, y, z = T_base_EE[0,3], T_base_EE[1,3], T_base_EE[2,3]
+                #     T_base_EE[0,3], T_base_EE[1,3], T_base_EE[2,3] = y, z, -x
+                #     cr, cp, cy = roll, pitch, yaw
+                #     Rx = np.array([[1,0,0],[0,np.cos(cr),-np.sin(cr)],[0,np.sin(cr),np.cos(cr)]])
+                #     Ry = np.array([[np.cos(cp),0,np.sin(cp)],[0,1,0],[-np.sin(cp),0,np.cos(cp)]])
+                #     Rz = np.array([[np.cos(cy),-np.sin(cy),0],[np.sin(cy),np.cos(cy),0],[0,0,1]])
+                #     T_base_EE[:3,:3] = Rz @ Ry @ Rx
+                #     R = T_base_EE[:3,:3]
+                #     T_base_EE[:3, :3] = np.eye(3)
+                #     roll_r = np.degrees(np.arctan2(R[2,1], R[2,2]))
+                #     pitch_r = np.degrees(np.arctan2(-R[2,0], np.sqrt(R[2,1]**2 + R[2,2]**2)))
+                #     yaw_r = np.degrees(np.arctan2(R[1,0], R[0,0]))
+                #     print(f"[MOTION] EE POSSSSS: x={T_base_EE[0,3]:.4f} y={T_base_EE[1,3]:.4f} z={T_base_EE[2,3]:.4f}")
+                #     print(f"[MOTION] EE ANGLES: roll={roll_r:.2f} pitch={pitch_r:.2f} yaw={yaw_r:.2f}")
+                #     x_c, y_c, z_c = -msg["x_mm"]/1000, -msg["y_mm"]/1000, msg["z_mm"]/1000
+                #     #print cam pos from msg
+                #     print(f"[MOTION] EE CAMMMMMM: x={x_c:.4f} y={y_c:.4f} z={z_c:.4f}")
+                #     p_cam_h = np.array([x_c, y_c, z_c, 1.0])
+                #     p_base_h = T_base_EE @ p_cam_h
+                #     x_fk, y_fk, z_fk = p_base_h[0], p_base_h[1], p_base_h[2]
+                #     x_gui = -x_fk * 1000
+                #     y_gui = 10
+                #     z_gui = y_fk * 1000
+                #     if x_gui > 0:
+                #         x_gui -= 10
+                #         z_gui += 100
+                #     # print(f"[MOTION] EE pos: x={T_base_EE[0,3]:.4f} y={T_base_EE[1,3]:.4f} z={T_base_EE[2,3]:.4f}")
+                #     # print(f"[MOTION] p_cam_h={p_cam_h} -> p_base_h={p_base_h}")
+                #     # print(f"[MOTION] transform_detect: raw=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) -> transformed=({x_gui:.1f},{y_gui:.1f},{z_gui:.1f}) mm")
+                #     conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": x_gui, "y_mm": y_gui, "z_mm": z_gui}) + "\n").encode())
 
                 elif msg["cmd"] == "detect":
                     def _do_detect(snap=curr_joints[:]):

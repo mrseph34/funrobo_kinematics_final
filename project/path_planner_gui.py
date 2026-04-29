@@ -8,7 +8,7 @@ import sys
 import time
 import os
 
-DETECT_OFFSET_MM = (0, -50, 0) 
+DETECT_OFFSET_MM = (-10, 0, 175) 
 
 PI_HOST = "192.168.16.154"
 PI_PORT = 9698
@@ -39,11 +39,14 @@ class ArmControlGUI:
         self.status = tk.StringVar(value="Not connected — click Connect")
 
         self.use_phi = tk.BooleanVar(value=False)
-        self.phi_val = tk.StringVar(value="-1.57")
+        self.phi_val = tk.StringVar(value="-3.14")
         self.fight_obstacles = tk.BooleanVar(value=False)
 
         self._sim_enabled = tk.BooleanVar(value=False)
         self._sim_proc = None
+        self._offset_x = tk.StringVar(value=str(DETECT_OFFSET_MM[0]))
+        self._offset_y = tk.StringVar(value=str(DETECT_OFFSET_MM[1]))
+        self._offset_z = tk.StringVar(value=str(DETECT_OFFSET_MM[2]))
         self._sim_viz_proc = None
         self._sim_sock = None
         self._sim_buf = ""
@@ -145,6 +148,13 @@ class ArmControlGUI:
                                       command=self._detect)
         self._detect_btn.pack(side="right", padx=8)
 
+        self._offset_row = ttk.Frame(panel, style="Dark.TFrame")
+        ttk.Label(self._offset_row, text="offset:", style="Dark.TLabel").pack(side="left", padx=(4,2))
+        for lbl, var in [("X", self._offset_x), ("Y", self._offset_y), ("Z", self._offset_z)]:
+            ttk.Label(self._offset_row, text=lbl, style="Dark.TLabel").pack(side="left")
+            tk.Entry(self._offset_row, textvariable=var, width=5, bg="#2a2d3d", fg=TXT,
+                     insertbackground=ACC, font=("Courier", 9), bd=0, justify="center").pack(side="left", padx=(0,6))
+
         self.joint_row = ttk.Frame(panel, style="Dark.TFrame")
         joint_row = self.joint_row
         joint_row.pack(fill="x", pady=4)
@@ -195,6 +205,7 @@ class ArmControlGUI:
                            bg=PANEL, fg=TXT, selectcolor="#2a2d3d",
                            activebackground=PANEL, font=("Courier", 9)).pack(side="left", padx=4)
 
+        OFF_BG = "#1f2235"
         OBS_BG = "#1f2235"
         OBS_INNER = "#252840"
 
@@ -337,8 +348,10 @@ class ArmControlGUI:
         if self.use_xyz.get():
             self.joint_row.pack_forget()
             self.xyz_row.pack(fill="x", pady=4, before=self._speed_row)
+            self._offset_row.pack(fill="x", pady=(0,4), before=self._speed_row)
         else:
             self.xyz_row.pack_forget()
+            self._offset_row.pack_forget()
             self.joint_row.pack(fill="x", pady=4, before=self._speed_row)
 
     def _get_phi(self):
@@ -487,14 +500,17 @@ class ArmControlGUI:
                         elif msg.get("status") == "sim":
                             self._print_sim(msg)
                         elif msg.get("cmd") == "transform_result":
-                            x = msg["x_mm"] + DETECT_OFFSET_MM[0]
-                            y = msg["y_mm"] + DETECT_OFFSET_MM[1]
-                            z = msg["z_mm"] + DETECT_OFFSET_MM[2]
-                            if DETECT_OFFSET_MM != (0, 0, 0):
-                                print(f"[GUI RECV transform_result] transformed=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) + offset{DETECT_OFFSET_MM} -> ({x:.1f},{y:.1f},{z:.1f}) mm")
+                            ox = float(self._offset_x.get() or 0)
+                            oy = float(self._offset_y.get() or 0)
+                            oz = float(self._offset_z.get() or 0)
+                            x = msg["x_mm"] + ox
+                            y = msg["y_mm"] + oy
+                            z = msg["z_mm"] + oz
+                            if (ox, oy, oz) != (0, 0, 0):
+                                print(f"[GUI RECV transform_result] transformed=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) + offset({ox},{oy},{oz}) -> ({x:.1f},{y:.1f},{z:.1f}) mm")
                             else:
                                 print(f"[GUI RECV transform_result] transformed=({x:.1f},{y:.1f},{z:.1f}) mm")
-                            self._mvp_detect_result = msg
+                            self._mvp_detect_result = {"cmd": "transform_result", "x_mm": x, "y_mm": y, "z_mm": z}
                             def _update(x=x, y=y, z=z):
                                 self.xyz_entries["X"].delete(0, "end"); self.xyz_entries["X"].insert(0, f"{x:.1f}")
                                 self.xyz_entries["Y"].delete(0, "end"); self.xyz_entries["Y"].insert(0, f"{y:.1f}")

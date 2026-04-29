@@ -9,7 +9,7 @@ class ArucoCameraTracker:
         self,
         video_id=1,
         save_path="./fun_kene_scripts/img/img1.png",
-        marker_length=0.0254
+        marker_length=0.0269875
     ):
         """
         video_id: camera index
@@ -44,6 +44,7 @@ class ArucoCameraTracker:
             cv2.aruco.DICT_APRILTAG_36H11
         )
         self.parameters = cv2.aruco.DetectorParameters()
+        self.parameters.detectInvertedMarker = True
         self.detector = cv2.aruco.ArucoDetector(
             self.aruco_dict, self.parameters
         )

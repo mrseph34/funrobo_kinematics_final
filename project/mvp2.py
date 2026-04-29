@@ -20,15 +20,23 @@ speed = 300
 # [j1, -30, 50, -120, 0]
 # [j1, 0, 90, -90, 0]
 
-scan_pts = (
-    [[-90, -30, 60, -120, 0], [-45, -30, 60, -120, 0], [0, -30, 60, -120, 0], [45, -30, 60, -120, 0], [90, -30, 60, -120, 0]] +
-    [[-90, -50, 40, -40, 0], [0, -50, 40, -40, 0], [90, -50, 40, -40, 0]]
-)
+scan_pts = [
+    [-90, -30, 60, -120, 0],
+    [-90, -50, 40, -40, 0],
+    [0, -30, 60, -120, 0],
+    [0, -50, 40, -40, 0],
+    [90, -30, 60, -120, 0],
+    [90, -50, 40, -40, 0],
+]
 
 def _do_detect(gui):
     gui._mvp_detect_result = None
     gui._mvp_waiting_detect = True
-    gui.sock.sendall((__import__("json").dumps({"cmd": "detect"}) + "\n").encode())
+    if getattr(gui, '_sim_mvp', None) and gui._sim_mvp.get() and gui._sim_sock:
+        bx, by, bz = gui._sim_blocks[0]
+        gui._sim_sock.sendall((__import__("json").dumps({"cmd": "sim_detect", "x_mm": bx, "y_mm": by, "z_mm": bz}) + "\n").encode())
+    else:
+        gui.sock.sendall((__import__("json").dumps({"cmd": "detect"}) + "\n").encode())
     for _ in range(50):
         time.sleep(0.1)
         if gui._mvp_detect_result is not None:
@@ -59,7 +67,7 @@ def _no_block_dance(gui):
         time.sleep(0.5)
     gui._send_atomic({"cmd": "stop"}, {"cmd": "move_joints", "joints": home, "speed_mms": speed, "traj_method": "Cubic", "fight_obstacles": False})
 
-def run(gui):
+def run(gui, sim_scan_pt=None):
     block_found = 0
     block_pos = []
 
@@ -69,7 +77,10 @@ def run(gui):
     for pt in scan_pts:
         gui._send_atomic({"cmd": "stop"}, {"cmd": "move_joints", "joints": pt, "speed_mms": speed, "traj_method": "Cubic", "fight_obstacles": False})
         time.sleep(0.5)
-        result = _do_detect(gui)
+        if getattr(gui, '_sim_mvp', None) and gui._sim_mvp.get():
+            result = _do_detect(gui) if (sim_scan_pt is not None and pt == sim_scan_pt) else None
+        else:
+            result = _do_detect(gui)
         if result and "x_mm" in result:
             block_pos = [result["x_mm"], result["y_mm"], result["z_mm"]]
             block_found = 1

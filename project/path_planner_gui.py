@@ -390,6 +390,31 @@ class ArmControlGUI:
                    command=self._run_mvp).pack(fill="x", pady=4)
         ttk.Button(panel, text="RUN MVP2", style="Accent.TButton",
                    command=self._run_mvp2).pack(fill="x", pady=4)
+        self._sim_mvp = tk.BooleanVar(value=False)
+        self._sim_mvp_frame = tk.Frame(panel, bg=SB_INNER, bd=0, highlightthickness=1,
+                                       highlightbackground="#2a4060")
+        sim_mvp_left = tk.Frame(self._sim_mvp_frame, bg=SB_INNER)
+        sim_mvp_left.pack(side="left", padx=6, pady=4)
+        tk.Checkbutton(sim_mvp_left, text="Sim MVP", variable=self._sim_mvp,
+                       bg=SB_INNER, fg="#66aacc", selectcolor=SB_INNER,
+                       activebackground=SB_INNER, font=("Courier", 8)).pack(side="left")
+        self._sim_mvp_scan_var = tk.StringVar()
+        self._sim_mvp_dropdown = ttk.Combobox(self._sim_mvp_frame, textvariable=self._sim_mvp_scan_var,
+                                               state="readonly", font=("Courier", 8), width=28)
+        self._sim_mvp_dropdown["values"] = [
+            "none (fail)",
+            "mvp1: [0,-30,50,-120,0]",
+            "mvp1: [-45,-30,50,-120,0]",
+            "mvp1: [45,-30,50,-120,0]",
+            "mvp2: [0,-30,60,-120,0]",
+            "mvp2: [0,-50,40,-40,0]",
+            "mvp2: [-90,-30,60,-120,0]",
+            "mvp2: [-90,-50,40,-40,0]",
+            "mvp2: [90,-30,60,-120,0]",
+            "mvp2: [90,-50,40,-40,0]",
+        ]
+        self._sim_mvp_dropdown.current(0)
+        self._sim_mvp_dropdown.pack(side="left", padx=6, pady=4)
 
         tk.Label(outer, textvariable=self.status, bg=BG, fg="#888899",
                  font=("Courier", 9), anchor="w").pack(fill="x", pady=(12, 0))
@@ -494,6 +519,7 @@ class ArmControlGUI:
         if self._sim_proc is not None:
             return
         self._sb_row.pack(fill="x", pady=(10, 4))
+        self._sim_mvp_frame.pack(fill="x", pady=(0, 4))
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             examples_dir = os.path.join(os.path.dirname(script_dir), "examples")
@@ -590,6 +616,7 @@ class ArmControlGUI:
 
     def _stop_sim(self):
         self._sb_row.pack_forget()
+        self._sim_mvp_frame.pack_forget()
         if self._viz_sock:
             try:
                 self._viz_sock.close()
@@ -899,11 +926,12 @@ class ArmControlGUI:
                 self.status.set(f"Moving to joints {joints}...")
 
     def _send_gripper(self, msg):
-        if not self.sock:
+        active = self.sock or self._sim_sock
+        if not active:
             messagebox.showerror("Not connected", "Connect to the Pi first.")
             return False
         try:
-            self.sock.sendall((json.dumps(msg) + "\n").encode())
+            active.sendall((json.dumps(msg) + "\n").encode())
             print(f"[GUI GRIPPER] sent: {msg}")
         except Exception as e:
             print(f"[GUI GRIPPER] send error: {e}")
@@ -928,23 +956,34 @@ class ArmControlGUI:
             self.status.set(f"Gripper set to {abs(w)}...")
 
     def _run_mvp(self):
-        if not self.sock:
+        if not self.sock and not (self._sim_mvp.get() and self._sim_sock):
             self.status.set("Not connected to Pi.")
             return
         self.status.set("MVP running...")
         import mvp
+        import importlib; importlib.reload(mvp)
         import threading
-        threading.Thread(target=mvp.run, args=(self,), daemon=True).start()
+        sim_pt = self._get_sim_mvp_pt() if self._sim_mvp.get() else None
+        threading.Thread(target=mvp.run, args=(self,), kwargs={"sim_scan_pt": sim_pt}, daemon=True).start()
 
     def _run_mvp2(self):
-        if not self.sock:
+        if not self.sock and not (self._sim_mvp.get() and self._sim_sock):
             self.status.set("Not connected to Pi.")
             return
         self.status.set("MVP2 running...")
         import mvp2
+        import importlib; importlib.reload(mvp2)
         import threading
-        threading.Thread(target=mvp2.run, args=(self,), daemon=True).start()
+        sim_pt = self._get_sim_mvp_pt() if self._sim_mvp.get() else None
+        threading.Thread(target=mvp2.run, args=(self,), kwargs={"sim_scan_pt": sim_pt}, daemon=True).start()
 
+    def _get_sim_mvp_pt(self):
+        val = self._sim_mvp_scan_var.get()
+        try:
+            import ast
+            return ast.literal_eval(val.split(": ", 1)[1])
+        except Exception:
+            return None
     def _home(self):
         print(f"[GUI] _home clicked")
         if self._send_atomic({"cmd": "stop"}, {"cmd": "home"}):

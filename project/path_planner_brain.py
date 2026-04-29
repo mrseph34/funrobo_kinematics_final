@@ -531,6 +531,38 @@ def handle(conn):
                     roll = 0
                     conn.sendall((json.dumps({"cmd": "ee_result", "cam_x": cam_x, "cam_y": cam_y, "cam_z": cam_z, "pitch": pitch, "yaw": yaw, "roll": roll}) + "\n").encode())
                 
+                elif msg["cmd"] == "sim_detect":
+                    ee, Hlist = model.calc_forward_kinematics(curr_joints)
+                    cam_x, cam_y, cam_z = ee.y, ee.z, -ee.x
+                    T = np.eye(4)
+                    for Hi in Hlist:
+                        T = T @ Hi
+                    R = T[:3,:3]
+                    pitch = (np.degrees(np.arctan2(R[0,2], R[0,0])) - 90) + 180
+                    yaw = np.degrees(np.arcsin(np.clip(R[0,1], -1, 1)))
+                    roll = 0
+                    p, yw, r = np.radians(-pitch), np.radians(yaw), np.radians(roll)
+                    Rx = np.array([[1,0,0],[0,np.cos(p),-np.sin(p)],[0,np.sin(p),np.cos(p)]])
+                    Ry = np.array([[np.cos(yw),0,np.sin(yw)],[0,1,0],[-np.sin(yw),0,np.cos(yw)]])
+                    Rz = np.array([[np.cos(r),-np.sin(r),0],[np.sin(r),np.cos(r),0],[0,0,1]])
+                    T_cam = np.eye(4)
+                    T_cam[:3,:3] = Ry @ Rx @ Rz
+                    T_cam[0,3], T_cam[1,3], T_cam[2,3] = cam_x, cam_y, cam_z
+                    R_inv = T_cam[:3,:3].T
+                    t_inv = -R_inv @ T_cam[:3,3]
+                    p_base = np.array([msg["x_mm"]/1000, msg["y_mm"]/1000, msg["z_mm"]/1000])
+                    p_cam = R_inv @ p_base + t_inv
+                    x_mm, y_mm, z_mm = p_cam[0]*1000, p_cam[1]*1000, p_cam[2]*1000
+                    print(f"[SIM DETECT] block=({msg['x_mm']},{msg['y_mm']},{msg['z_mm']}) -> cam=({x_mm:.1f},{y_mm:.1f},{z_mm:.1f}) mm")
+                    x_c, y_c, z_c = x_mm/1000, y_mm/1000, z_mm/1000
+                    print(f"[MOTION] EE POSSSSS: x={cam_x:.4f} y={cam_y:.4f} z={cam_z:.4f}")
+                    print(f"[MOTION] EE ANGLES: pitch={pitch:.2f} yaw={yaw:.2f} roll={roll:.2f}")
+                    print(f"[MOTION] EE CAMMMMMM: x={x_c:.4f} y={y_c:.4f} z={z_c:.4f}")
+                    p_base_h = T_cam @ np.array([x_c, y_c, z_c, 1.0])
+                    x_gui, y_gui, z_gui = p_base_h[0]*1000, p_base_h[1]*1000, p_base_h[2]*1000
+                    print(f"[MOTION] transform_detect: raw=({x_mm:.1f},{y_mm:.1f},{z_mm:.1f}) -> transformed=({x_gui:.1f},{y_gui:.1f},{z_gui:.1f}) mm")
+                    conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": x_gui, "y_mm": y_gui, "z_mm": z_gui}) + "\n").encode())
+
                 elif msg["cmd"] == "transform_detect":
                     ee, Hlist = model.calc_forward_kinematics(curr_joints)
                     # y, z, -x

@@ -419,25 +419,10 @@ class ArmControlGUI:
         self._sim_blocks[0] = tuple(vals)
         self._send_sim_blocks()
         bx, by, bz = self._sim_blocks[0]
-        # base -> cam: invert T_cam
-        cam_x, cam_y, cam_z = 0.0, 0.094, 0.095
-        pitch, yaw, roll = -90, 0, 0.0
-        p_r, y_r, r_r = np.radians(-pitch), np.radians(yaw), np.radians(roll)
-        Rx = np.array([[1,0,0],[0,np.cos(p_r),-np.sin(p_r)],[0,np.sin(p_r),np.cos(p_r)]])
-        Ry = np.array([[np.cos(y_r),0,np.sin(y_r)],[0,1,0],[-np.sin(y_r),0,np.cos(y_r)]])
-        Rz = np.array([[np.cos(r_r),-np.sin(r_r),0],[np.sin(r_r),np.cos(r_r),0],[0,0,1]])
-        T_cam = np.eye(4)
-        T_cam[:3,:3] = Ry @ Rx @ Rz
-        T_cam[0,3], T_cam[1,3], T_cam[2,3] = cam_x, cam_y, cam_z
-        R = T_cam[:3, :3]
-        t = T_cam[:3, 3]
-        p_base = np.array([bx / 1000.0, by / 1000.0, bz / 1000.0])
-        p_cam = R.T @ (p_base - t)
-        x_mm, y_mm, z_mm = p_cam[0] * 1000, p_cam[1] * 1000, p_cam[2] * 1000
-        print(f"[SIM DETECT] block=({bx},{by},{bz}) -> cam=({x_mm:.1f},{y_mm:.1f},{z_mm:.1f}) mm")
+        print(f"[SIM DETECT] block=({bx},{by},{bz})")
         if self._sim_sock:
             try:
-                self._sim_sock.sendall((json.dumps({"cmd": "transform_detect", "x_mm": x_mm, "y_mm": y_mm, "z_mm": z_mm}) + "\n").encode())
+                self._sim_sock.sendall((json.dumps({"cmd": "sim_detect", "x_mm": bx, "y_mm": by, "z_mm": bz}) + "\n").encode())
             except Exception as e:
                 self.status.set(f"Sim detect error: {e}")
         else:

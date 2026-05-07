@@ -1,5 +1,10 @@
-Install it:
+Cd to it:
 cd ~/funrobo_kinematics_final
+
+Activate Conda: 
+conda activate funrobo_hw
+
+Install it:
 pip install -e .
 
 Add to path:
@@ -8,9 +13,6 @@ export PYTHONPATH=$PYTHONPATH:/home/pi
 Make it Permanent:
 echo 'export PYTHONPATH=$PYTHONPATH:/home/pi' >> ~/.bashrc
 source ~/.bashrc
-
-Activate Conda: 
-conda activate funrobo_hw
 
 Run it:
 python /home/pi/funrobo_kinematics_final/project/path_planner_server.py

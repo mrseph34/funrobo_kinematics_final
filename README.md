@@ -8,7 +8,7 @@ A 5DOF Hiwonder robotic arm that autonomously scans for, detects, picks up, and 
 
 ## Demo
 
-> [Watch the demo video here](#) *www.insert_link.com*
+> [Watch the demo video here](https://youtu.be/OypeQhLTVBc?si=mlR5jEimHxC0cxbP)
 
 ---
 

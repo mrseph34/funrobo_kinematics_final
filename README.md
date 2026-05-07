@@ -14,7 +14,7 @@ A 5DOF Hiwonder robotic arm that autonomously scans for, detects, picks up, and 
 
 ## Technical Report
 
-[Read the full technical report here](#) *(replace with link to uploaded PDF)*
+[Read the full technical report here](./Final%20Technical%20Report.pdf)
 
 ---
 

@@ -8,9 +8,9 @@ import sys
 import time
 import os
 
-DETECT_OFFSET_MM = (0, 0, 0) # (-10, 0, 175) 
+DETECT_OFFSET_MM = (0, 60, 0) # (-10, 0, 175) 
 
-PI_HOST = "192.168.16.154"
+PI_HOST = "192.168.16.121"
 PI_PORT = 9698
 MOVE_SPEED_MMS = 100
 

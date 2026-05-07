@@ -602,7 +602,15 @@ def handle(conn):
                     p_base_h = T_cam @ np.array([x_c, y_c, z_c, 1.0])
                     x_gui, y_gui, z_gui = p_base_h[0]*1000, p_base_h[1]*1000, p_base_h[2]*1000
                     print(f"[MOTION] transform_detect: raw=({msg['x_mm']:.1f},{msg['y_mm']:.1f},{msg['z_mm']:.1f}) -> transformed=({x_gui:.1f},{y_gui:.1f},{z_gui:.1f}) mm")
-                    conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": x_gui, "y_mm": y_gui, "z_mm": z_gui}) + "\n").encode())
+                    if yaw > 0:
+                        x_gui -= yaw/2
+                        z_gui += yaw/2
+                    if yaw == 0:
+                        x_gui -= 20
+                        z_gui -= 50
+                    if yaw < 0:
+                        x_gui -= 20
+                    conn.sendall((json.dumps({"cmd": "transform_result", "x_mm": x_gui, "y_mm": 0, "z_mm": z_gui}) + "\n").encode())
 
                 elif msg["cmd"] == "detect":
                     def _do_detect(snap=curr_joints[:]):
